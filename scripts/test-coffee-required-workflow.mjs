@@ -345,8 +345,20 @@ test("exact policy failures and protected changes cannot bypass sensitive review
 test("trusted quality runs after authorization with fixed npm authority", () => {
   const classifier = workflow.indexOf("Classify policy evolution and protected path changes");
   const quality = workflow.indexOf("Trusted deterministic quality");
+  const qualityJob = workflow.slice(
+    workflow.indexOf("  quality:"),
+    workflow.indexOf("  eval-harbor:"),
+  );
+  const gitleaksInstall = qualityJob.indexOf(
+    "bash control/.github/scripts/install-gitleaks.sh",
+  );
+  const candidateQuality = qualityJob.indexOf(
+    "control/.github/scripts/run-candidate-quality.sh",
+  );
   assert.ok(classifier > 0);
   assert.ok(quality > classifier);
+  assert.ok(gitleaksInstall > 0);
+  assert.ok(candidateQuality > gitleaksInstall);
   assert.match(workflow, /needs\.sensitive-review\.result == 'success'/u);
   assert.match(qualityRunner, /^set -euo pipefail$/mu);
   assert.match(qualityRunner, /env -i/u);
