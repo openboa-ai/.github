@@ -215,7 +215,14 @@ jobs:
           languages: javascript-typescript
           build-mode: none
       - name: Analyze candidate data with CodeQL
+        id: codeql-analyze
         uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
+        with:
+          output: ${{ runner.temp }}/codeql-sarif
+      - name: Fail closed on CodeQL findings
+        run: >-
+          node control/.github/scripts/check-codeql-sarif.mjs
+          '${{ steps.codeql-analyze.outputs.sarif-output }}'
 
   quality:
     name: Trusted deterministic quality

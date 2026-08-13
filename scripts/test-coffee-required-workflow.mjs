@@ -17,6 +17,7 @@ import {
   classifyCandidate,
   validateCandidateWorkflowDelegation,
 } from "../.github/scripts/classify-candidate.mjs";
+import { checkCodeqlSarif } from "../.github/scripts/check-codeql-sarif.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const workflowPath = resolve(root, ".github/workflows/coffee-trusted-gate.yml");
@@ -329,6 +330,65 @@ test("trusted gate scans secrets, dependencies, and CodeQL without candidate cod
   assert.match(workflow, /security-events: write/u);
   assert.match(workflow, /needs: authorize/gu);
   assert.doesNotMatch(workflow, /^  pull_request_target:/mu);
+});
+
+test("trusted CodeQL fails closed on local SARIF findings", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "coffee-codeql-sarif-"));
+  try {
+    const sarifPath = join(fixture, "javascript.sarif");
+    writeFileSync(
+      sarifPath,
+      `${JSON.stringify({
+        version: "2.1.0",
+        runs: [{ tool: { driver: { name: "CodeQL" } }, results: [] }],
+      })}\n`,
+    );
+    assert.deepEqual(checkCodeqlSarif(fixture), { files: 1, results: 0 });
+
+    writeFileSync(
+      sarifPath,
+      `${JSON.stringify({
+        version: "2.1.0",
+        runs: [
+          {
+            tool: { driver: { name: "CodeQL" } },
+            results: [{ ruleId: "js/example" }],
+          },
+        ],
+      })}\n`,
+    );
+    assert.throws(() => checkCodeqlSarif(fixture), /CodeQL findings/u);
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
+});
+
+test("trusted CodeQL requires regular bounded SARIF output", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "coffee-codeql-bounds-"));
+  try {
+    assert.throws(() => checkCodeqlSarif(fixture), /SARIF file/u);
+    const outside = join(fixture, "outside.json");
+    writeFileSync(outside, '{"version":"2.1.0","runs":[]}\n');
+    symlinkSync(outside, join(fixture, "javascript.sarif"));
+    assert.throws(() => checkCodeqlSarif(fixture), /regular file/u);
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
+});
+
+test("trusted CodeQL checks generated SARIF before aggregate success", () => {
+  const codeqlJob = workflow.slice(
+    workflow.indexOf("  codeql:"),
+    workflow.indexOf("  quality:"),
+  );
+  const analyze = codeqlJob.indexOf("id: codeql-analyze");
+  const sarifCheck = codeqlJob.indexOf(
+    "node control/.github/scripts/check-codeql-sarif.mjs",
+  );
+  assert.ok(analyze > 0);
+  assert.ok(sarifCheck > analyze);
+  assert.match(codeqlJob, /output: \$\{\{ runner\.temp \}\}\/codeql-sarif/u);
+  assert.match(codeqlJob, /steps\.codeql-analyze\.outputs\.sarif-output/u);
 });
 
 test("exact policy failures and protected changes cannot bypass sensitive review", () => {
