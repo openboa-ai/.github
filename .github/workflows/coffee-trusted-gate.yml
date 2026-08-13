@@ -203,6 +203,14 @@ jobs:
       contents: read
       security-events: write
     steps:
+      - name: Check out immutable organization controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openboa-ai/.github
+          ref: ${{ inputs.control_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: control
       - name: Check out candidate source without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
