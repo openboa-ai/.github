@@ -12,6 +12,7 @@ if awk '$1 == "120000" { found = 1 } END { exit !found }' "$index_entries"; then
 fi
 
 test ! -e "$candidate_root/.npmrc"
+test ! -e "$candidate_root/.github/policy-parser/.npmrc"
 test ! -e "$candidate_root/npm-shrinkwrap.json"
 test ! -L "$candidate_root/package.json"
 test ! -L "$candidate_root/package-lock.json"
