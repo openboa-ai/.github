@@ -397,6 +397,12 @@ test("trusted CodeQL checks generated SARIF before aggregate success", () => {
   assert.ok(sarifCheck > analyze);
   assert.match(codeqlJob, /ref: \$\{\{ inputs\.control_sha \}\}/u);
   assert.match(codeqlJob, /path: control/u);
+  assert.match(codeqlJob, /path: candidate/u);
+  assert.match(codeqlJob, /source-root: candidate/u);
+  assert.match(
+    codeqlJob,
+    /checkout_path: \$\{\{ github\.workspace \}\}\/candidate/u,
+  );
   assert.match(codeqlJob, /output: \$\{\{ runner\.temp \}\}\/codeql-sarif/u);
   assert.match(codeqlJob, /steps\.codeql-analyze\.outputs\.sarif-output/u);
 });
