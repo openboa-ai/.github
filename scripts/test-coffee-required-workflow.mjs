@@ -315,7 +315,10 @@ test("trusted gate clears Node injection paths and resolves parser from base", (
 });
 
 test("trusted gate scans secrets, dependencies, and CodeQL without candidate code", () => {
-  assert.match(workflow, /control\/\.github\/scripts\/install-gitleaks\.sh/u);
+  assert.match(
+    workflow,
+    /run: bash control\/\.github\/scripts\/install-gitleaks\.sh/u,
+  );
   assert.match(workflow, /gitleaks git/u);
   assert.match(workflow, /git -C candidate cat-file blob/u);
   assert.match(

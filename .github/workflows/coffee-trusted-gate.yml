@@ -76,7 +76,7 @@ jobs:
           control/.github/scripts/reject-candidate-authorities.sh
           "$GITHUB_WORKSPACE/candidate"
       - name: Install immutable Gitleaks from organization controls
-        run: control/.github/scripts/install-gitleaks.sh
+        run: bash control/.github/scripts/install-gitleaks.sh
       - name: Scan candidate history, worktree, and raw blobs without execution
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
