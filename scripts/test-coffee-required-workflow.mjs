@@ -13,7 +13,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { classifyCandidate } from "../.github/scripts/classify-candidate.mjs";
+import {
+  classifyCandidate,
+  validateCandidateWorkflowDelegation,
+} from "../.github/scripts/classify-candidate.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const workflowPath = resolve(root, ".github/workflows/coffee-trusted-gate.yml");
@@ -40,6 +43,28 @@ function commit(repository, message) {
   }).trim();
 }
 
+function trustedWrapper(controlSha) {
+  return `name: OpenBoa Coffee trusted gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  trusted:
+    name: OpenBoa Coffee trusted required
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: openboa-ai/.github/.github/workflows/coffee-trusted-gate.yml@${controlSha}
+    with:
+      control_sha: ${controlSha}
+`;
+}
+
 function classificationFixture(mutate) {
   const fixture = mkdtempSync(join(tmpdir(), "coffee-classifier-"));
   const candidate = join(fixture, "candidate");
@@ -50,8 +75,13 @@ function classificationFixture(mutate) {
   execFileSync("git", ["-C", candidate, "config", "user.email", "test@example.invalid"]);
   execFileSync("git", ["-C", candidate, "config", "user.name", "Policy test"]);
   mkdirSync(join(candidate, "src"));
+  mkdirSync(join(candidate, ".github/workflows"), { recursive: true });
   writeFileSync(join(candidate, "README.md"), "base\n");
   writeFileSync(join(candidate, "src/control.ts"), "export const control = true;\n");
+  writeFileSync(
+    join(candidate, ".github/workflows/trusted.yml"),
+    trustedWrapper("a".repeat(40)),
+  );
   const baseSha = commit(candidate, "base");
   writeFileSync(
     join(trusted, ".github/merge-policy.json"),
@@ -77,8 +107,11 @@ function classifyFixture(mutate, exactPolicyOutcome = "success") {
   }
 }
 
-test("trusted gate uses only the ruleset-supported pull request event", () => {
-  assert.match(workflow, /^on:\n  pull_request:\s*$/mu);
+test("trusted gate is callable only through a trusted target wrapper", () => {
+  assert.match(workflow, /^on:\n  workflow_call:\n    inputs:\n      control_sha:/mu);
+  assert.match(workflow, /required: true/u);
+  assert.match(workflow, /type: string/u);
+  assert.doesNotMatch(workflow, /^  pull_request(?:_target)?:/mu);
   assert.doesNotMatch(workflow, /^concurrency:/mu);
   assert.match(workflow, /^permissions: \{\}$/mu);
   assert.match(workflow, /openboa-ai\/coffee-chat-bench/gu);
@@ -86,7 +119,7 @@ test("trusted gate uses only the ruleset-supported pull request event", () => {
 });
 
 test("candidate is data and all controls come from immutable trusted commits", () => {
-  const sourceCheckout = workflow.indexOf("ref: ${{ github.workflow_sha }}");
+  const sourceCheckout = workflow.indexOf("ref: ${{ inputs.control_sha }}");
   const baseCheckout = workflow.indexOf(
     "ref: ${{ github.event.pull_request.base.sha }}",
   );
@@ -101,6 +134,7 @@ test("candidate is data and all controls come from immutable trusted commits", (
   assert.ok(candidateCheckout > baseCheckout);
   assert.ok(policy > candidateCheckout);
   assert.match(workflow, /repository: openboa-ai\/\.github/u);
+  assert.match(workflow, /ref: \$\{\{ inputs\.control_sha \}\}/gu);
   assert.match(workflow, /path: control/u);
   assert.match(workflow, /path: trusted-target/u);
   assert.match(workflow, /path: candidate/u);
@@ -180,9 +214,8 @@ test("classifier checks both sides of protected path renames", () => {
   assert.ok(result.protectedChanges.includes("src/control.ts"));
 });
 
-test("classifier rejects target-owned automatic workflows", () => {
+test("classifier rejects any workflow except the exact inert trusted wrapper", () => {
   const fixture = classificationFixture((candidate) => {
-    mkdirSync(join(candidate, ".github/workflows"), { recursive: true });
     writeFileSync(join(candidate, ".github/workflows/spoof.yml"), "on: pull_request\n");
   });
   try {
@@ -195,11 +228,35 @@ test("classifier rejects target-owned automatic workflows", () => {
           headSha: fixture.headSha,
           trustedRoot: fixture.trusted,
         }),
-      /must delegate automatic workflows/u,
+      /exact trusted wrapper/u,
     );
   } finally {
     rmSync(fixture.fixture, { force: true, recursive: true });
   }
+});
+
+test("trusted wrapper validation is version-updatable but structurally exact", () => {
+  const firstSha = "a".repeat(40);
+  const secondSha = "b".repeat(40);
+  assert.equal(validateCandidateWorkflowDelegation(trustedWrapper(firstSha)), firstSha);
+  assert.equal(validateCandidateWorkflowDelegation(trustedWrapper(secondSha)), secondSha);
+  assert.throws(
+    () =>
+      validateCandidateWorkflowDelegation(
+        trustedWrapper(firstSha).replace(
+          `control_sha: ${firstSha}`,
+          `control_sha: ${secondSha}`,
+        ),
+      ),
+    /exact trusted wrapper/u,
+  );
+  assert.throws(
+    () =>
+      validateCandidateWorkflowDelegation(
+        `${trustedWrapper(firstSha)}      - run: candidate-script\n`,
+      ),
+    /exact trusted wrapper/u,
+  );
 });
 
 test("authority check rejects an early symlink in a large Git index", () => {
@@ -268,7 +325,7 @@ test("trusted gate scans secrets, dependencies, and CodeQL without candidate cod
   assert.match(workflow, /build-mode: none/u);
   assert.match(workflow, /security-events: write/u);
   assert.match(workflow, /needs: authorize/gu);
-  assert.doesNotMatch(workflow, /pull_request_target/u);
+  assert.doesNotMatch(workflow, /^  pull_request_target:/mu);
 });
 
 test("exact policy failures and protected changes cannot bypass sensitive review", () => {
@@ -305,7 +362,10 @@ test("Eval Harbor calibration uses a fresh runner before any candidate program",
   assert.match(workflow, /eval-harbor:/u);
   assert.match(workflow, /github\.repository == 'openboa-ai\/coffee-chat-eval'/u);
   assert.match(workflow, /Trusted Eval Harbor calibration/u);
-  const harborJob = workflow.slice(workflow.indexOf("  eval-harbor:"), workflow.indexOf("  required:"));
+  const harborJob = workflow.slice(
+    workflow.indexOf("  eval-harbor:"),
+    workflow.lastIndexOf("  required:"),
+  );
   assert.match(harborJob, /control\/\.github\/scripts\/run-eval-harbor\.sh/u);
   assert.doesNotMatch(harborJob, /npm run|npm test|src\/cli\.ts|src\/pcda-cli\.ts/u);
   assert.match(evalHarborRunner, /--require-hashes/u);

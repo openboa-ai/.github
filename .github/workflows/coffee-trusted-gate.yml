@@ -1,7 +1,12 @@
 name: OpenBoa Coffee trusted gate
 
 on:
-  pull_request:
+  workflow_call:
+    inputs:
+      control_sha:
+        description: Immutable organization-controls revision selected by the trusted target wrapper
+        required: true
+        type: string
 
 permissions: {}
 
@@ -46,7 +51,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: openboa-ai/.github
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ inputs.control_sha }}
           fetch-depth: 1
           persist-credentials: false
           path: control
@@ -232,7 +237,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: openboa-ai/.github
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ inputs.control_sha }}
           fetch-depth: 1
           persist-credentials: false
           path: control
@@ -272,7 +277,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: openboa-ai/.github
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ inputs.control_sha }}
           fetch-depth: 1
           persist-credentials: false
           path: control
