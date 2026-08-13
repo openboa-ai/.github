@@ -381,12 +381,22 @@ test("trusted CodeQL checks generated SARIF before aggregate success", () => {
     workflow.indexOf("  codeql:"),
     workflow.indexOf("  quality:"),
   );
+  const controlCheckout = codeqlJob.indexOf(
+    "repository: openboa-ai/.github",
+  );
+  const candidateCheckout = codeqlJob.indexOf(
+    "repository: ${{ github.event.pull_request.head.repo.full_name }}",
+  );
   const analyze = codeqlJob.indexOf("id: codeql-analyze");
   const sarifCheck = codeqlJob.indexOf(
     "node control/.github/scripts/check-codeql-sarif.mjs",
   );
+  assert.ok(controlCheckout > 0);
+  assert.ok(candidateCheckout > controlCheckout);
   assert.ok(analyze > 0);
   assert.ok(sarifCheck > analyze);
+  assert.match(codeqlJob, /ref: \$\{\{ inputs\.control_sha \}\}/u);
+  assert.match(codeqlJob, /path: control/u);
   assert.match(codeqlJob, /output: \$\{\{ runner\.temp \}\}\/codeql-sarif/u);
   assert.match(codeqlJob, /steps\.codeql-analyze\.outputs\.sarif-output/u);
 });
