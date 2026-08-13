@@ -1,0 +1,210 @@
+name: OpenBoa Coffee trusted gate
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  authorize:
+    name: Trusted policy and secret boundary
+    if: >-
+      ${{ contains(fromJSON('["openboa-ai/coffee-chat",
+      "openboa-ai/coffee-chat-roastery","openboa-ai/coffee-chat-eval",
+      "openboa-ai/coffee-chat-bench"]'), github.repository) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Admit only the solo maintainer or in-repository Dependabot
+        env:
+          ACTOR: ${{ github.actor }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          BASE_REPOSITORY: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          case "$BASE_REPOSITORY" in
+            openboa-ai/coffee-chat|openboa-ai/coffee-chat-roastery|openboa-ai/coffee-chat-eval|openboa-ai/coffee-chat-bench) ;;
+            *) exit 1 ;;
+          esac
+          case "$AUTHOR_ASSOCIATION" in
+            OWNER|MEMBER)
+              test "$ACTOR" = "$PR_AUTHOR"
+              test "$HEAD_REPOSITORY" = "$BASE_REPOSITORY"
+              ;;
+            *)
+              test "$ACTOR" = 'dependabot[bot]'
+              test "$PR_AUTHOR" = 'dependabot[bot]'
+              test "$HEAD_REPOSITORY" = "$BASE_REPOSITORY"
+              ;;
+          esac
+      - name: Check out immutable organization controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openboa-ai/.github
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: control
+      - name: Check out trusted target controls from the base commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: trusted-target
+      - name: Check out the exact candidate as inert data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+      - name: Reject alternate npm installation authority
+        run: >-
+          control/.github/scripts/reject-candidate-authorities.sh
+          "$GITHUB_WORKSPACE/candidate"
+      - name: Install immutable Gitleaks from organization controls
+        run: control/.github/scripts/install-gitleaks.sh
+      - name: Scan candidate history, worktree, and raw blobs without execution
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -o pipefail
+          test ! -e candidate/.gitleaks.toml
+          ignore_path=/dev/null
+          if test -e trusted-target/.gitleaksignore; then
+            cmp trusted-target/.gitleaksignore candidate/.gitleaksignore
+            ignore_path="$GITHUB_WORKSPACE/trusted-target/.gitleaksignore"
+          else
+            test ! -e candidate/.gitleaksignore
+          fi
+          gitleaks git --config "$GITLEAKS_TRUSTED_CONFIG" \
+            --gitleaks-ignore-path "$ignore_path" --ignore-gitleaks-allow \
+            --redact --no-banner "$GITHUB_WORKSPACE/candidate"
+          gitleaks dir --config "$GITLEAKS_TRUSTED_CONFIG" \
+            --gitleaks-ignore-path "$ignore_path" --ignore-gitleaks-allow \
+            --redact --no-banner "$GITHUB_WORKSPACE/candidate"
+          if ! git -C candidate cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git -C candidate fetch --no-tags --depth=1 \
+              "https://github.com/$BASE_REPOSITORY.git" "$BASE_SHA"
+          fi
+          blob_dir="$(mktemp -d)"
+          trap 'rm -rf "$blob_dir"' EXIT
+          git -C candidate rev-list --objects "$BASE_SHA..$HEAD_SHA" |
+            cut -d' ' -f1 |
+            git -C candidate cat-file --batch-check='%(objectname) %(objecttype)' |
+            awk '$2 == "blob" { print $1 }' |
+            while read -r object_id; do
+              git -C candidate cat-file blob "$object_id" > "$blob_dir/$object_id"
+            done
+          gitleaks dir --config "$GITLEAKS_TRUSTED_CONFIG" \
+            --gitleaks-ignore-path "$ignore_path" --ignore-gitleaks-allow \
+            --redact --no-banner "$blob_dir"
+      - name: Set up Node.js for trusted policy only
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Authenticate and install the base policy parser
+        env:
+          NODE_OPTIONS: ""
+          NODE_PATH: ""
+          NPM_CONFIG_GLOBALCONFIG: /dev/null
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          NPM_CONFIG_REPLACE_REGISTRY_HOST: never
+          NPM_CONFIG_USERCONFIG: /dev/null
+        run: |
+          test -f "$GITHUB_WORKSPACE/trusted-target/.github/policy-bootstrap.mjs"
+          test -f "$GITHUB_WORKSPACE/trusted-target/.github/ci-policy.mjs"
+          test ! -L "$GITHUB_WORKSPACE/trusted-target/.github/policy-bootstrap.mjs"
+          test ! -L "$GITHUB_WORKSPACE/trusted-target/.github/ci-policy.mjs"
+          node "$GITHUB_WORKSPACE/trusted-target/.github/policy-bootstrap.mjs"
+          npm ci --ignore-scripts --prefix "$GITHUB_WORKSPACE/trusted-target/.github/policy-parser"
+          npm audit --audit-level=moderate --prefix "$GITHUB_WORKSPACE/trusted-target/.github/policy-parser"
+      - name: Enforce trusted base policy against candidate data
+        env:
+          BENCH_CI_POLICY_ROOT: ${{ github.workspace }}/candidate
+          CI_POLICY_ROOT: ${{ github.workspace }}/candidate
+          EVAL_CI_POLICY_ROOT: ${{ github.workspace }}/candidate
+          NODE_OPTIONS: ""
+          NODE_PATH: ""
+          ROASTERY_CI_POLICY_ROOT: ${{ github.workspace }}/candidate
+        run: node "$GITHUB_WORKSPACE/trusted-target/.github/ci-policy.mjs"
+
+  dependency-review:
+    name: Trusted dependency review
+    if: >-
+      ${{ contains(fromJSON('["openboa-ai/coffee-chat",
+      "openboa-ai/coffee-chat-roastery","openboa-ai/coffee-chat-eval",
+      "openboa-ai/coffee-chat-bench"]'), github.repository) }}
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Reject vulnerable dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
+        with:
+          comment-summary-in-pr: never
+          fail-on-severity: moderate
+          fail-on-scopes: runtime,development,unknown
+          show-patched-versions: true
+
+  codeql:
+    name: Trusted CodeQL JavaScript-TypeScript
+    if: >-
+      ${{ contains(fromJSON('["openboa-ai/coffee-chat",
+      "openboa-ai/coffee-chat-roastery","openboa-ai/coffee-chat-eval",
+      "openboa-ai/coffee-chat-bench"]'), github.repository) }}
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out candidate source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Initialize CodeQL without building candidate code
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - name: Analyze candidate data with CodeQL
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
+
+  required:
+    name: OpenBoa Coffee trusted required
+    if: >-
+      ${{ always() && contains(fromJSON('["openboa-ai/coffee-chat",
+      "openboa-ai/coffee-chat-roastery","openboa-ai/coffee-chat-eval",
+      "openboa-ai/coffee-chat-bench"]'), github.repository) }}
+    needs:
+      - authorize
+      - dependency-review
+      - codeql
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every trusted lane
+        env:
+          AUTHORIZE_RESULT: ${{ needs.authorize.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+          DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
+        run: |
+          test "$AUTHORIZE_RESULT" = success
+          test "$DEPENDENCY_REVIEW_RESULT" = success
+          test "$CODEQL_RESULT" = success
