@@ -47,15 +47,54 @@ function changedPaths(candidateRoot, baseSha, headSha) {
   return paths;
 }
 
-function requireNoCandidateWorkflows(candidateRoot) {
-  const workflowRoot = resolve(candidateRoot, ".github/workflows");
-  if (!existsSync(workflowRoot)) return;
-  const workflows = readdirSync(workflowRoot).filter((name) => /\.ya?ml$/u.test(name));
-  if (workflows.length > 0) {
-    throw new Error(
-      `target repositories must delegate automatic workflows to organization controls: ${workflows.join(",")}`,
-    );
+function trustedWrapper(controlSha) {
+  return `name: OpenBoa Coffee trusted gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  trusted:
+    name: OpenBoa Coffee trusted required
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: openboa-ai/.github/.github/workflows/coffee-trusted-gate.yml@${controlSha}
+    with:
+      control_sha: ${controlSha}
+`;
+}
+
+export function validateCandidateWorkflowDelegation(source) {
+  if (typeof source !== "string" || source.length > 16 * 1024) {
+    throw new Error("target repository must retain the exact trusted wrapper");
   }
+  const match = source.match(
+    /uses: openboa-ai\/\.github\/\.github\/workflows\/coffee-trusted-gate\.yml@([0-9a-f]{40})/u,
+  );
+  const controlSha = match?.[1];
+  if (controlSha === undefined || source !== trustedWrapper(controlSha)) {
+    throw new Error("target repository must retain the exact trusted wrapper");
+  }
+  return controlSha;
+}
+
+function requireTrustedCandidateWorkflow(candidateRoot) {
+  const workflowRoot = resolve(candidateRoot, ".github/workflows");
+  if (!existsSync(workflowRoot)) {
+    throw new Error("target repository must retain the exact trusted wrapper");
+  }
+  const entries = readdirSync(workflowRoot).sort();
+  if (entries.length !== 1 || entries[0] !== "trusted.yml") {
+    throw new Error("target repository must retain the exact trusted wrapper");
+  }
+  validateCandidateWorkflowDelegation(
+    readFileSync(resolve(workflowRoot, "trusted.yml"), "utf8"),
+  );
 }
 
 export function classifyCandidate({
@@ -65,7 +104,7 @@ export function classifyCandidate({
   headSha,
   trustedRoot,
 }) {
-  requireNoCandidateWorkflows(candidateRoot);
+  requireTrustedCandidateWorkflow(candidateRoot);
   const policy = JSON.parse(
     readFileSync(resolve(trustedRoot, ".github/merge-policy.json"), "utf8"),
   );

@@ -8,9 +8,10 @@ definitions. Treat every executable or policy file as a sensitive control.
   `coffee-security` GitHub Environment for the solo maintainer's confirmation.
 - Required workflows execute pull-request content only as inert data. Controls
   and parsers must come from the required workflow SHA or the target base SHA.
-- Target repositories must not define automatic workflow YAML. Authorization,
-  secret scanning, dependency review, CodeQL, and deterministic quality belong
-  to this organization-owned required workflow.
+- Target repositories define one exact `pull_request_target` wrapper containing
+  no executable steps. It calls this organization-owned reusable workflow by a
+  full commit SHA; authorization, secret scanning, dependency review, CodeQL,
+  and deterministic quality all remain here.
 - Do not add secrets, OIDC, package publishing, deployment, or write-token
   permissions. The only write permission is `security-events: write` in the
   trusted CodeQL job.
