@@ -1,0 +1,7 @@
+/.github/** @openboa-ai/security-maintainers
+/.npmrc @openboa-ai/security-maintainers
+/AGENTS.md @openboa-ai/security-maintainers
+/CODEOWNERS @openboa-ai/security-maintainers
+/SECURITY.md @openboa-ai/security-maintainers
+/package.json @openboa-ai/security-maintainers
+/scripts/** @openboa-ai/security-maintainers
