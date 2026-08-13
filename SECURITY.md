@@ -5,5 +5,11 @@ private vulnerability report. Do not include credentials or exploit details in
 a public issue.
 
 The `.github/workflows/coffee-trusted-gate.yml` workflow is an organization
-trust boundary. Changes to it, its installer, ownership, or this policy require
-review from `@openboa-ai/security-maintainers`.
+trust boundary. Target repositories delegate automatic pull-request execution
+to it. Routine changes may auto-merge only after every trusted lane succeeds;
+protected paths and policy evolution additionally require the solo maintainer's
+`coffee-security` GitHub Environment confirmation.
+
+Candidate repositories may not supply workflow YAML, alternate npm authority,
+or symlinked control data. Eval Harbor calibration uses a fresh runner and an
+authenticated dependency graph so earlier candidate tests cannot mutate it.

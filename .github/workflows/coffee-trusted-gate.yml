@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    outputs:
+      sensitive: ${{ steps.classify.outputs.sensitive }}
     steps:
       - name: Admit only the solo maintainer or in-repository Dependabot
         env:
@@ -115,11 +117,13 @@ jobs:
         env:
           NODE_OPTIONS: ""
           NODE_PATH: ""
-          NPM_CONFIG_GLOBALCONFIG: /dev/null
+          NPM_CONFIG_GLOBALCONFIG: ${{ runner.temp }}/trusted-npm-globalconfig
           NPM_CONFIG_REGISTRY: https://registry.npmjs.org
           NPM_CONFIG_REPLACE_REGISTRY_HOST: never
-          NPM_CONFIG_USERCONFIG: /dev/null
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/trusted-npm-userconfig
         run: |
+          : > "$NPM_CONFIG_GLOBALCONFIG"
+          : > "$NPM_CONFIG_USERCONFIG"
           test -f "$GITHUB_WORKSPACE/trusted-target/.github/policy-bootstrap.mjs"
           test -f "$GITHUB_WORKSPACE/trusted-target/.github/ci-policy.mjs"
           test ! -L "$GITHUB_WORKSPACE/trusted-target/.github/policy-bootstrap.mjs"
@@ -127,7 +131,9 @@ jobs:
           node "$GITHUB_WORKSPACE/trusted-target/.github/policy-bootstrap.mjs"
           npm ci --ignore-scripts --prefix "$GITHUB_WORKSPACE/trusted-target/.github/policy-parser"
           npm audit --audit-level=moderate --prefix "$GITHUB_WORKSPACE/trusted-target/.github/policy-parser"
-      - name: Enforce trusted base policy against candidate data
+      - name: Evaluate exact trusted base policy against candidate data
+        id: exact-policy
+        continue-on-error: true
         env:
           BENCH_CI_POLICY_ROOT: ${{ github.workspace }}/candidate
           CI_POLICY_ROOT: ${{ github.workspace }}/candidate
@@ -136,6 +142,27 @@ jobs:
           NODE_PATH: ""
           ROASTERY_CI_POLICY_ROOT: ${{ github.workspace }}/candidate
         run: node "$GITHUB_WORKSPACE/trusted-target/.github/ci-policy.mjs"
+      - name: Classify policy evolution and protected path changes
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          EXACT_POLICY_OUTCOME: ${{ steps.exact-policy.outcome }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRUSTED_ROOT: ${{ github.workspace }}/trusted-target
+        run: node control/.github/scripts/classify-candidate.mjs
+
+  sensitive-review:
+    name: Sensitive change confirmation
+    needs: authorize
+    if: ${{ needs.authorize.outputs.sensitive == 'true' }}
+    environment: coffee-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Record the GitHub Environment approval
+        run: test '${{ needs.authorize.outputs.sensitive }}' = true
 
   dependency-review:
     name: Trusted dependency review
@@ -185,6 +212,87 @@ jobs:
       - name: Analyze candidate data with CodeQL
         uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
 
+  quality:
+    name: Trusted deterministic quality
+    needs:
+      - authorize
+      - dependency-review
+      - sensitive-review
+    if: >-
+      ${{ always() && needs.authorize.result == 'success' &&
+      needs.dependency-review.result == 'success' &&
+      (needs.authorize.outputs.sensitive != 'true' ||
+      needs.sensitive-review.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable organization controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openboa-ai/.github
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: control
+      - name: Check out the exact authorized candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Run repository-specific checks with a minimal environment
+        run: >-
+          control/.github/scripts/run-candidate-quality.sh
+          '${{ github.repository }}' "$GITHUB_WORKSPACE/candidate"
+
+  eval-harbor:
+    name: Trusted Eval Harbor calibration
+    needs:
+      - authorize
+      - sensitive-review
+    if: >-
+      ${{ always() && github.repository == 'openboa-ai/coffee-chat-eval' &&
+      needs.authorize.result == 'success' &&
+      (needs.authorize.outputs.sensitive != 'true' ||
+      needs.sensitive-review.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable organization controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openboa-ai/.github
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: control
+      - name: Check out the exact authorized Eval candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: candidate
+      - name: Set up Node.js without candidate dependencies
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Install the hash-locked Harbor graph and calibrate
+        run: >-
+          control/.github/scripts/run-eval-harbor.sh
+          "$GITHUB_WORKSPACE/candidate"
+
   required:
     name: OpenBoa Coffee trusted required
     if: >-
@@ -193,8 +301,11 @@ jobs:
       "openboa-ai/coffee-chat-bench"]'), github.repository) }}
     needs:
       - authorize
+      - sensitive-review
       - dependency-review
       - codeql
+      - eval-harbor
+      - quality
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -204,7 +315,23 @@ jobs:
           AUTHORIZE_RESULT: ${{ needs.authorize.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
           DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
+          EVAL_HARBOR_RESULT: ${{ needs.eval-harbor.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          REPOSITORY: ${{ github.repository }}
+          SENSITIVE: ${{ needs.authorize.outputs.sensitive }}
+          SENSITIVE_REVIEW_RESULT: ${{ needs.sensitive-review.result }}
         run: |
           test "$AUTHORIZE_RESULT" = success
           test "$DEPENDENCY_REVIEW_RESULT" = success
           test "$CODEQL_RESULT" = success
+          test "$QUALITY_RESULT" = success
+          if test "$REPOSITORY" = openboa-ai/coffee-chat-eval; then
+            test "$EVAL_HARBOR_RESULT" = success
+          else
+            test "$EVAL_HARBOR_RESULT" = skipped
+          fi
+          if test "$SENSITIVE" = true; then
+            test "$SENSITIVE_REVIEW_RESULT" = success
+          else
+            test "$SENSITIVE_REVIEW_RESULT" = skipped
+          fi
