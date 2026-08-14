@@ -78,6 +78,14 @@ function classificationFixture(mutate) {
   mkdirSync(join(candidate, "src"));
   mkdirSync(join(candidate, ".github/workflows"), { recursive: true });
   writeFileSync(join(candidate, "README.md"), "base\n");
+  writeFileSync(
+    join(candidate, "package.json"),
+    `${JSON.stringify({ devDependencies: { prettier: "3.9.6" } })}\n`,
+  );
+  writeFileSync(
+    join(candidate, "package-lock.json"),
+    `${JSON.stringify({ lockfileVersion: 3 })}\n`,
+  );
   writeFileSync(join(candidate, "src/control.ts"), "export const control = true;\n");
   writeFileSync(
     join(candidate, ".github/workflows/trusted.yml"),
@@ -86,17 +94,34 @@ function classificationFixture(mutate) {
   const baseSha = commit(candidate, "base");
   writeFileSync(
     join(trusted, ".github/merge-policy.json"),
-    `${JSON.stringify({ protected_paths: ["/src/**", "/.github/**"] })}\n`,
+    `${JSON.stringify({
+      protected_paths: [
+        "/src/**",
+        "/.github/**",
+        "/package.json",
+        "/package-lock.json",
+      ],
+    })}\n`,
   );
   mutate(candidate);
   const headSha = commit(candidate, "candidate");
   return { baseSha, candidate, fixture, headSha, trusted };
 }
 
-function classifyFixture(mutate, exactPolicyOutcome = "success") {
+function classifyFixture(
+  mutate,
+  exactPolicyOutcome = "success",
+  identity = {
+    actor: "solo-maintainer",
+    baseRepository: "openboa-ai/coffee-chat",
+    headRepository: "openboa-ai/coffee-chat",
+    prAuthor: "solo-maintainer",
+  },
+) {
   const fixture = classificationFixture(mutate);
   try {
     return classifyCandidate({
+      ...identity,
       baseSha: fixture.baseSha,
       candidateRoot: fixture.candidate,
       exactPolicyOutcome,
@@ -206,6 +231,106 @@ test("classifier routes protected edits and policy evolution to the Environment"
   assert.equal(policyEvolution.sensitive, true);
 });
 
+test("classifier exempts only exact in-repository Dependabot package changes", () => {
+  const packageChanges = (candidate) => {
+    writeFileSync(
+      join(candidate, "package.json"),
+      `${JSON.stringify({ devDependencies: { prettier: "3.9.7" } })}\n`,
+    );
+    writeFileSync(
+      join(candidate, "package-lock.json"),
+      `${JSON.stringify({ lockfileVersion: 3, updated: true })}\n`,
+    );
+  };
+  const dependabotIdentity = {
+    actor: "dependabot[bot]",
+    baseRepository: "openboa-ai/coffee-chat",
+    headRepository: "openboa-ai/coffee-chat",
+    prAuthor: "dependabot[bot]",
+  };
+
+  const routine = classifyFixture(
+    packageChanges,
+    "success",
+    dependabotIdentity,
+  );
+  assert.equal(routine.sensitive, false);
+  assert.deepEqual(routine.protectedChanges, [
+    "package-lock.json",
+    "package.json",
+  ]);
+
+  for (const [
+    label,
+    exactPolicyOutcome,
+    identity,
+    mutate,
+    expectedProtectedChanges,
+  ] of [
+    [
+      "owner package update",
+      "success",
+      {
+        actor: "solo-maintainer",
+        baseRepository: "openboa-ai/coffee-chat",
+        headRepository: "openboa-ai/coffee-chat",
+        prAuthor: "solo-maintainer",
+      },
+      packageChanges,
+      ["package-lock.json", "package.json"],
+    ],
+    [
+      "Dependabot actor mismatch",
+      "success",
+      { ...dependabotIdentity, actor: "solo-maintainer" },
+      packageChanges,
+      ["package-lock.json", "package.json"],
+    ],
+    [
+      "Dependabot author mismatch",
+      "success",
+      { ...dependabotIdentity, prAuthor: "solo-maintainer" },
+      packageChanges,
+      ["package-lock.json", "package.json"],
+    ],
+    [
+      "Dependabot fork",
+      "success",
+      { ...dependabotIdentity, headRepository: "attacker/coffee-chat" },
+      packageChanges,
+      ["package-lock.json", "package.json"],
+    ],
+    [
+      "policy failure",
+      "failure",
+      dependabotIdentity,
+      packageChanges,
+      ["package-lock.json", "package.json"],
+    ],
+    [
+      "additional protected path",
+      "success",
+      dependabotIdentity,
+      (candidate) => {
+        packageChanges(candidate);
+        writeFileSync(
+          join(candidate, "src/control.ts"),
+          "export const control = false;\n",
+        );
+      },
+      ["package-lock.json", "package.json", "src/control.ts"],
+    ],
+  ]) {
+    const result = classifyFixture(mutate, exactPolicyOutcome, identity);
+    assert.equal(result.sensitive, true, label);
+    assert.deepEqual(
+      result.protectedChanges,
+      expectedProtectedChanges,
+      label,
+    );
+  }
+});
+
 test("classifier checks both sides of protected path renames", () => {
   const result = classifyFixture((candidate) => {
     mkdirSync(join(candidate, "lib"));
@@ -297,7 +422,7 @@ test("trusted gate clears Node injection paths and resolves parser from base", (
   );
   assert.match(
     workflow,
-    /npm ci --ignore-scripts --prefix "\$GITHUB_WORKSPACE\/trusted-target\/\.github\/policy-parser"/u,
+    /npm ci --ignore-scripts --no-bin-links --prefix "\$GITHUB_WORKSPACE\/trusted-target\/\.github\/policy-parser"/u,
   );
   for (const rootVariable of [
     "CI_POLICY_ROOT",
@@ -416,6 +541,20 @@ test("exact policy failures and protected changes cannot bypass sensitive review
   assert.match(workflow, /SENSITIVE_REVIEW_RESULT/u);
   assert.match(workflow, /test "\$SENSITIVE_REVIEW_RESULT" = success/u);
   assert.match(workflow, /test "\$SENSITIVE_REVIEW_RESULT" = skipped/u);
+  const classifyStep = workflow.slice(
+    workflow.indexOf("      - name: Classify policy evolution"),
+    workflow.indexOf("\n\n  sensitive-review:"),
+  );
+  assert.match(classifyStep, /ACTOR: \$\{\{ github\.actor \}\}/u);
+  assert.match(classifyStep, /BASE_REPOSITORY: \$\{\{ github\.repository \}\}/u);
+  assert.match(
+    classifyStep,
+    /HEAD_REPOSITORY: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}/u,
+  );
+  assert.match(
+    classifyStep,
+    /PR_AUTHOR: \$\{\{ github\.event\.pull_request\.user\.login \}\}/u,
+  );
 });
 
 test("trusted quality runs after authorization with fixed npm authority", () => {
@@ -446,6 +585,73 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
   assert.match(qualityRunner, /: > "\$npm_globalconfig"/u);
   assert.match(qualityRunner, /NPM_CONFIG_REPLACE_REGISTRY_HOST=never/u);
   assert.doesNotMatch(qualityRunner, /GITHUB_TOKEN|GH_TOKEN|ACTIONS_ID_TOKEN/u);
+  assert.match(qualityRunner, /run_clean npm ci --ignore-scripts --no-bin-links\n/u);
+  assert.match(
+    qualityRunner,
+    /run_clean npm ci --ignore-scripts --no-bin-links --prefix \.github\/policy-parser/u,
+  );
+  assert.doesNotMatch(qualityRunner, /\bnpm (?:run|test)\b/u);
+
+  const commandsByRepository = new Map([
+    [
+      "openboa-ai/coffee-chat",
+      [
+        "run_clean node node_modules/prettier/bin/prettier.cjs --check .",
+        "run_clean node node_modules/typescript/bin/tsc --noEmit",
+        "run_clean node --test tests/*.test.mjs",
+        "run_clean node scripts/verify-readme-assets.mjs",
+        "run_clean node scripts/build-package.mjs",
+        "run_clean node scripts/package-smoke.mjs",
+      ],
+    ],
+    [
+      "openboa-ai/coffee-chat-roastery",
+      [
+        "run_clean node node_modules/prettier/bin/prettier.cjs --check .",
+        "run_clean node node_modules/typescript/bin/tsc --noEmit",
+        "run_clean node scripts/build.mjs",
+        "run_clean git diff --exit-code -- dist",
+        "run_clean node scripts/check-repository-state.mjs --root .",
+        "run_clean node --test tests/*.test.mjs",
+        "run_clean node scripts/check-package.mjs",
+      ],
+    ],
+    [
+      "openboa-ai/coffee-chat-eval",
+      [
+        "run_clean node node_modules/prettier/bin/prettier.cjs --check .",
+        "run_clean node node_modules/typescript/bin/tsc --noEmit",
+        "run_clean node node_modules/typescript/bin/tsc --noEmit",
+        "run_clean python3 -m py_compile evals/protocol-canary/tests/verify.py evals/protocol-canary/tests/resources.py evals/ifeval-smoke/tests/verify.py evals/ifeval-smoke/tests/resources.py",
+        "run_clean sh -n evals/protocol-canary/solution/solve.sh evals/protocol-canary/tests/test.sh evals/ifeval-smoke/solution/solve.sh evals/ifeval-smoke/tests/test.sh",
+        "run_clean node --experimental-strip-types --test tests/*.test.*",
+        "run_clean node --experimental-strip-types src/cli.ts dry-run",
+        "run_clean node --experimental-strip-types --test tests/smoke.test.ts",
+        'run_clean node --experimental-strip-types src/pcda-cli.ts calibrate --oracle-result "$candidate_root/tests/fixtures/pcda-calibration/oracle-result.json" --noop-result "$candidate_root/tests/fixtures/pcda-calibration/noop-result.json"',
+      ],
+    ],
+    [
+      "openboa-ai/coffee-chat-bench",
+      [
+        'run_clean node node_modules/prettier/bin/prettier.cjs --check package.json package-lock.json tsconfig.json prettier.config.mjs docs/quality-map.md docs/validity/*.md perspectives/*.json "bank/**/*.json" schemas/*.json scripts/*.mjs src/*.ts tests/*.test.mjs tests/*.test.ts tests/fixtures/**/*.json tests/fixtures/projection/artifacts/echo.json tests/fixtures/projection/artifacts/judgment-access.json tests/fixtures/projection/artifacts/list-all.json tests/fixtures/projection/artifacts/no-op.json tests/fixtures/projection/artifacts/oracle.json',
+        "run_clean node scripts/check-inactive-boundary.mjs --root .",
+        "run_clean node node_modules/typescript/bin/tsc --noEmit",
+        "run_clean node --experimental-strip-types --test tests/*.test.mjs tests/*.test.ts",
+      ],
+    ],
+  ]);
+  for (const [repository, commands] of commandsByRepository) {
+    const start = qualityRunner.indexOf(`  ${repository})`);
+    const end = qualityRunner.indexOf("    ;;", start);
+    assert.ok(start > 0, `${repository}: command branch`);
+    assert.ok(end > start, `${repository}: command branch end`);
+    const branch = qualityRunner.slice(start, end);
+    const commandLines = branch
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("run_clean "));
+    assert.deepEqual(commandLines, commands, repository);
+  }
 });
 
 test("Eval Harbor calibration uses a fresh runner before any candidate program", () => {
