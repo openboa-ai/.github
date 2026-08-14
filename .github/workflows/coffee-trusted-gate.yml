@@ -134,7 +134,7 @@ jobs:
           test ! -L "$GITHUB_WORKSPACE/trusted-target/.github/policy-bootstrap.mjs"
           test ! -L "$GITHUB_WORKSPACE/trusted-target/.github/ci-policy.mjs"
           node "$GITHUB_WORKSPACE/trusted-target/.github/policy-bootstrap.mjs"
-          npm ci --ignore-scripts --prefix "$GITHUB_WORKSPACE/trusted-target/.github/policy-parser"
+          npm ci --ignore-scripts --no-bin-links --prefix "$GITHUB_WORKSPACE/trusted-target/.github/policy-parser"
           npm audit --audit-level=moderate --prefix "$GITHUB_WORKSPACE/trusted-target/.github/policy-parser"
       - name: Evaluate exact trusted base policy against candidate data
         id: exact-policy
@@ -150,10 +150,14 @@ jobs:
       - name: Classify policy evolution and protected path changes
         id: classify
         env:
+          ACTOR: ${{ github.actor }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REPOSITORY: ${{ github.repository }}
           CANDIDATE_ROOT: ${{ github.workspace }}/candidate
           EXACT_POLICY_OUTCOME: ${{ steps.exact-policy.outcome }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           TRUSTED_ROOT: ${{ github.workspace }}/trusted-target
         run: node control/.github/scripts/classify-candidate.mjs
 

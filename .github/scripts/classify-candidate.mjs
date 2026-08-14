@@ -98,10 +98,14 @@ function requireTrustedCandidateWorkflow(candidateRoot) {
 }
 
 export function classifyCandidate({
+  actor,
+  baseRepository,
   baseSha,
   candidateRoot,
   exactPolicyOutcome,
+  headRepository,
   headSha,
+  prAuthor,
   trustedRoot,
 }) {
   requireTrustedCandidateWorkflow(candidateRoot);
@@ -121,7 +125,20 @@ export function classifyCandidate({
   const protectedChanges = paths.filter((path) =>
     matchers.some((matcher) => matcher.test(path)),
   );
-  const sensitive = exactPolicyOutcome !== "success" || protectedChanges.length > 0;
+  const dependabotPackageOnly =
+    exactPolicyOutcome === "success" &&
+    actor === "dependabot[bot]" &&
+    prAuthor === "dependabot[bot]" &&
+    typeof baseRepository === "string" &&
+    baseRepository.length > 0 &&
+    headRepository === baseRepository &&
+    protectedChanges.length > 0 &&
+    protectedChanges.every(
+      (path) => path === "package.json" || path === "package-lock.json",
+    );
+  const sensitive =
+    exactPolicyOutcome !== "success" ||
+    (protectedChanges.length > 0 && !dependabotPackageOnly);
   return Object.freeze({
     sensitive,
     protectedChanges: Object.freeze(protectedChanges),
@@ -131,10 +148,14 @@ export function classifyCandidate({
 
 function main() {
   const result = classifyCandidate({
+    actor: process.env.ACTOR,
+    baseRepository: process.env.BASE_REPOSITORY,
     baseSha: process.env.BASE_SHA,
     candidateRoot: process.env.CANDIDATE_ROOT,
     exactPolicyOutcome: process.env.EXACT_POLICY_OUTCOME,
+    headRepository: process.env.HEAD_REPOSITORY,
     headSha: process.env.HEAD_SHA,
+    prAuthor: process.env.PR_AUTHOR,
     trustedRoot: process.env.TRUSTED_ROOT,
   });
   appendFileSync(
