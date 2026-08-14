@@ -260,7 +260,13 @@ test("classifier exempts only exact in-repository Dependabot package changes", (
     "package.json",
   ]);
 
-  for (const [label, exactPolicyOutcome, identity, mutate] of [
+  for (const [
+    label,
+    exactPolicyOutcome,
+    identity,
+    mutate,
+    expectedProtectedChanges,
+  ] of [
     [
       "owner package update",
       "success",
@@ -271,30 +277,35 @@ test("classifier exempts only exact in-repository Dependabot package changes", (
         prAuthor: "solo-maintainer",
       },
       packageChanges,
+      ["package-lock.json", "package.json"],
     ],
     [
       "Dependabot actor mismatch",
       "success",
       { ...dependabotIdentity, actor: "solo-maintainer" },
       packageChanges,
+      ["package-lock.json", "package.json"],
     ],
     [
       "Dependabot author mismatch",
       "success",
       { ...dependabotIdentity, prAuthor: "solo-maintainer" },
       packageChanges,
+      ["package-lock.json", "package.json"],
     ],
     [
       "Dependabot fork",
       "success",
       { ...dependabotIdentity, headRepository: "attacker/coffee-chat" },
       packageChanges,
+      ["package-lock.json", "package.json"],
     ],
     [
       "policy failure",
       "failure",
       dependabotIdentity,
       packageChanges,
+      ["package-lock.json", "package.json"],
     ],
     [
       "additional protected path",
@@ -307,12 +318,16 @@ test("classifier exempts only exact in-repository Dependabot package changes", (
           "export const control = false;\n",
         );
       },
+      ["package-lock.json", "package.json", "src/control.ts"],
     ],
   ]) {
     const result = classifyFixture(mutate, exactPolicyOutcome, identity);
     assert.equal(result.sensitive, true, label);
-    assert.ok(result.protectedChanges.includes("package.json"), label);
-    assert.ok(result.protectedChanges.includes("package-lock.json"), label);
+    assert.deepEqual(
+      result.protectedChanges,
+      expectedProtectedChanges,
+      label,
+    );
   }
 });
 
@@ -575,7 +590,7 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
     qualityRunner,
     /run_clean npm ci --ignore-scripts --no-bin-links --prefix \.github\/policy-parser/u,
   );
-  assert.doesNotMatch(qualityRunner, /run_clean npm (?:run|test)\b/u);
+  assert.doesNotMatch(qualityRunner, /\bnpm (?:run|test)\b/u);
 
   const commandsByRepository = new Map([
     [
@@ -606,6 +621,7 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
       [
         "run_clean node node_modules/prettier/bin/prettier.cjs --check .",
         "run_clean node node_modules/typescript/bin/tsc --noEmit",
+        "run_clean node node_modules/typescript/bin/tsc --noEmit",
         "run_clean python3 -m py_compile evals/protocol-canary/tests/verify.py evals/protocol-canary/tests/resources.py evals/ifeval-smoke/tests/verify.py evals/ifeval-smoke/tests/resources.py",
         "run_clean sh -n evals/protocol-canary/solution/solve.sh evals/protocol-canary/tests/test.sh evals/ifeval-smoke/solution/solve.sh evals/ifeval-smoke/tests/test.sh",
         "run_clean node --experimental-strip-types --test tests/*.test.*",
@@ -630,9 +646,11 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
     assert.ok(start > 0, `${repository}: command branch`);
     assert.ok(end > start, `${repository}: command branch end`);
     const branch = qualityRunner.slice(start, end);
-    for (const command of commands) {
-      assert.ok(branch.includes(command), `${repository}: ${command}`);
-    }
+    const commandLines = branch
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("run_clean "));
+    assert.deepEqual(commandLines, commands, repository);
   }
 });
 
