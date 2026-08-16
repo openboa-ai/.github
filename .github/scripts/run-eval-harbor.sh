@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-candidate_root="${{1:?candidate repository root is required}"
-candidate_tmp="${{RUNNER_TEMP:?}"
+candidate_root="${1:?candidate repository root is required}"
+candidate_tmp="${RUNNER_TEMP:?}"
 uv_root="$candidate_tmp/uv-venv"
 harbor_root="$candidate_tmp/harbor-venv"
 bench_root="$candidate_tmp/bench-source"
@@ -19,8 +19,8 @@ clean_environment=(
   "GIT_CONFIG_GLOBAL=/dev/null"
   "GIT_CONFIG_NOSYSTEM=1"
   "GIT_TERMINAL_PROMPT=0"
-  "HOME=${{HOME:?}"
-  "LANG=${{LANG:-C.UTF-8}"
+  "HOME=${HOME:?}"
+  "LANG=${LANG:-C.UTF-8}"
   "NPM_CONFIG_CACHE=$candidate_tmp/bench-npm-cache"
   "NPM_CONFIG_GLOBALCONFIG=$npm_globalconfig"
   "NPM_CONFIG_REGISTRY=https://registry.npmjs.org"
@@ -31,11 +31,11 @@ clean_environment=(
   "PIP_DISABLE_PIP_VERSION_CHECK=1"
   "PIP_INDEX_URL=https://pypi.org/simple"
   "RUNNER_TEMP=$candidate_tmp"
-  "TMPDIR=${{TMPDIR:-$candidate_tmp}"
+  "TMPDIR=${TMPDIR:-$candidate_tmp}"
   "UV_INDEX_URL=https://pypi.org/simple"
   "UV_NO_CONFIG=1"
 )
-if test -n "${{DOCKER_HOST:-}"; then
+if test -n "${DOCKER_HOST:-}"; then
   clean_environment+=("DOCKER_HOST=$DOCKER_HOST")
 fi
 
@@ -43,7 +43,7 @@ fi
 : > "$npm_userconfig"
 
 run_clean() {
-  env -i "${{clean_environment[@]}" "$@"
+  env -i "${clean_environment[@]}" "$@"
 }
 
 run_git() {
