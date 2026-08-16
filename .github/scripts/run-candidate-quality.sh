@@ -58,15 +58,12 @@ case "$repository" in
     run_clean node scripts/check-package.mjs
     ;;
   openboa-ai/coffee-chat-eval)
-    run_clean node node_modules/prettier/bin/prettier.cjs --check .
-    run_clean node node_modules/typescript/bin/tsc --noEmit
-    run_clean node node_modules/typescript/bin/tsc --noEmit
-    run_clean python3 -m py_compile evals/protocol-canary/tests/verify.py evals/protocol-canary/tests/resources.py evals/ifeval-smoke/tests/verify.py evals/ifeval-smoke/tests/resources.py
-    run_clean sh -n evals/protocol-canary/solution/solve.sh evals/protocol-canary/tests/test.sh evals/ifeval-smoke/solution/solve.sh evals/ifeval-smoke/tests/test.sh
-    run_clean node --experimental-strip-types --test tests/*.test.*
-    run_clean node --experimental-strip-types src/cli.ts dry-run
-    run_clean node --experimental-strip-types --test tests/smoke.test.ts
-    run_clean node --experimental-strip-types src/pcda-cli.ts calibrate --oracle-result "$candidate_root/tests/fixtures/pcda-calibration/oracle-result.json" --noop-result "$candidate_root/tests/fixtures/pcda-calibration/noop-result.json"
+    run_clean npm run format:check
+    run_clean npm run typecheck
+    run_clean npm test
+    run_clean npm run dry-run
+    run_clean npm run smoke
+    run_clean npm run ci:policy
     ;;
   openboa-ai/coffee-chat-bench)
     run_clean node node_modules/prettier/bin/prettier.cjs --check package.json package-lock.json tsconfig.json prettier.config.mjs docs/quality-map.md docs/validity/*.md perspectives/*.json "bank/**/*.json" schemas/*.json scripts/*.mjs src/*.ts tests/*.test.mjs tests/*.test.ts tests/fixtures/**/*.json tests/fixtures/projection/artifacts/echo.json tests/fixtures/projection/artifacts/judgment-access.json tests/fixtures/projection/artifacts/list-all.json tests/fixtures/projection/artifacts/no-op.json tests/fixtures/projection/artifacts/oracle.json
