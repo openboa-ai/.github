@@ -69,7 +69,7 @@ case "$repository" in
     run_clean node --experimental-strip-types src/pcda-cli.ts calibrate --oracle-result "$candidate_root/tests/fixtures/pcda-calibration/oracle-result.json" --noop-result "$candidate_root/tests/fixtures/pcda-calibration/noop-result.json"
     ;;
   openboa-ai/coffee-chat-bench)
-    run_clean node node_modules/prettier/bin/prettier.cjs --check package.json package-lock.json tsconfig.json prettier.config.mjs docs/quality-map.md docs/validity/*.md perspectives/*.json "bank/**/*.json" schemas/*.json scripts/*.mjs src/*.ts tests/*.test.mjs tests/*.test.ts tests/fixtures/**/*.json tests/fixtures/projection/artifacts/echo.json tests/fixtures/projection/artifacts/judgment-access.json tests/fixtures/projection/artifacts/list-all.json tests/fixtures/projection/artifacts/no-op.json tests/fixtures/projection/artifacts/oracle.json
+    run_clean node node_modules/prettier/bin/prettier.cjs --check AGENTS.md README.md DATA-CARD.md PREREGISTRATION.md OVERLAP-REPORT.json package.json package-lock.json tsconfig.json prettier.config.mjs docs/*.md docs/validity/*.md harbor/*.md qualification/*.md qualification/*.json "bank/**/*.json" harbor/*.ts schemas/*.json scripts/*.mjs src/*.ts tests/*.mjs tests/*.ts
     run_clean node scripts/check-inactive-boundary.mjs --root .
     run_clean node node_modules/typescript/bin/tsc --noEmit
     run_clean node --experimental-strip-types --test tests/*.test.mjs tests/*.test.ts
