@@ -58,8 +58,8 @@ case "$repository" in
     run_clean node scripts/check-package.mjs
     ;;
   openboa-ai/coffee-chat-eval)
-    run_clean npm run format:check
-    run_clean npm run typecheck
+    run_clean node node_modules/prettier/bin/prettier.cjs --check .
+    run_clean node node_modules/typescript/bin/tsc --noEmit
     run_clean npm test
     run_clean npm run dry-run
     run_clean npm run smoke
