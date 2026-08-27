@@ -590,7 +590,12 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
     qualityRunner,
     /run_clean npm ci --ignore-scripts --no-bin-links --prefix \.github\/policy-parser/u,
   );
-  assert.doesNotMatch(qualityRunner, /\bnpm (?:run|test)\b/u);
+  assert.match(qualityRunner, /zero_base_layout\(\)/u);
+  assert.match(qualityRunner, /run_clean node \.github\/ci-policy\.mjs/u);
+  assert.match(
+    qualityRunner,
+    /candidate is neither a legacy Coffee repository nor a recognized zero-base layout/u,
+  );
 
   const commandsByRepository = new Map([
     [
@@ -621,13 +626,10 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
       [
         "run_clean node node_modules/prettier/bin/prettier.cjs --check .",
         "run_clean node node_modules/typescript/bin/tsc --noEmit",
-        "run_clean node node_modules/typescript/bin/tsc --noEmit",
-        "run_clean python3 -m py_compile evals/protocol-canary/tests/verify.py evals/protocol-canary/tests/resources.py evals/ifeval-smoke/tests/verify.py evals/ifeval-smoke/tests/resources.py",
-        "run_clean sh -n evals/protocol-canary/solution/solve.sh evals/protocol-canary/tests/test.sh evals/ifeval-smoke/solution/solve.sh evals/ifeval-smoke/tests/test.sh",
-        "run_clean node --experimental-strip-types --test tests/*.test.*",
-        "run_clean node --experimental-strip-types src/cli.ts dry-run",
-        "run_clean node --experimental-strip-types --test tests/smoke.test.ts",
-        'run_clean node --experimental-strip-types src/pcda-cli.ts calibrate --oracle-result "$candidate_root/tests/fixtures/pcda-calibration/oracle-result.json" --noop-result "$candidate_root/tests/fixtures/pcda-calibration/noop-result.json"',
+        "run_clean npm test",
+        "run_clean npm run dry-run",
+        "run_clean npm run smoke",
+        "run_clean npm run ci:policy",
       ],
     ],
     [
@@ -642,7 +644,8 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
   ]);
 
   for (const [repository, commands] of commandsByRepository) {
-    const start = qualityRunner.indexOf(`  ${repository})`);
+    const repositoryCase = qualityRunner.lastIndexOf('case "$repository" in');
+    const start = qualityRunner.indexOf(`  ${repository})`, repositoryCase);
     const end = qualityRunner.indexOf("    ;;", start);
     assert.ok(start > 0, `${repository}: command branch`);
     assert.ok(end > start, `${repository}: command branch end`);
@@ -667,9 +670,9 @@ test("Eval Harbor calibration uses a fresh runner before any candidate program",
   assert.match(harborJob, /control\/\.github\/scripts\/run-eval-harbor\.sh/u);
   assert.doesNotMatch(harborJob, /npm run|npm test|src\/cli\.ts|src\/pcda-cli\.ts/u);
   assert.match(evalHarborRunner, /--require-hashes/u);
-  assert.match(evalHarborRunner, /HARBOR_COMMAND=/u);
-  assert.match(evalHarborRunner, /node --experimental-strip-types src\/canary-cli\.ts calibrate/u);
-  assert.match(evalHarborRunner, /node --experimental-strip-types src\/canary-cli\.ts benchmark-calibrate/u);
-  assert.doesNotMatch(evalHarborRunner, /npm run|npm test|src\/cli\.ts|src\/pcda-cli\.ts/u);
+  assert.match(evalHarborRunner, /--harbor-command/u);
+  assert.match(evalHarborRunner, /node --experimental-strip-types src\/cli\.ts oracle-control/u);
+  assert.match(evalHarborRunner, /candidate_root.*iterations\/README\.md/u);
+  assert.match(evalHarborRunner, /Eval Harbor calibration not applicable/u);
   assert.match(workflow, /EVAL_HARBOR_RESULT/u);
 });

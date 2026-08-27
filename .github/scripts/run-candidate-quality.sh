@@ -33,9 +33,49 @@ run_clean() {
   env -i "${candidate_environment[@]}" "$@"
 }
 
+zero_base_layout() {
+  case "$repository" in
+    openboa-ai/coffee-chat)
+      test -f plugin.json
+      test -f skills/roast/SKILL.md
+      test -f skills/brew/SKILL.md
+      ;;
+    openboa-ai/coffee-chat-roastery)
+      test -f origins/.gitkeep
+      test -f beans/.gitkeep
+      ;;
+    openboa-ai/coffee-chat-eval)
+      test -f iterations/README.md
+      ;;
+    openboa-ai/coffee-chat-bench)
+      test -f evals/README.md
+      test -f graders/README.md
+      test -f research/README.md
+      test -f evals/output-quality/perspective-capture/.gitkeep
+      test -f evals/output-quality/perspective-application/human-understanding/.gitkeep
+      test -f evals/output-quality/perspective-application/agent-judgment-action/.gitkeep
+      test -f evals/triggering/perspective-capture/.gitkeep
+      test -f evals/triggering/perspective-application/.gitkeep
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 cd "$candidate_root"
 run_clean npm ci --ignore-scripts --no-bin-links
 run_clean npm audit --audit-level=moderate
+
+if test ! -f .github/policy-parser/package.json; then
+  if ! zero_base_layout; then
+    echo "candidate is neither a legacy Coffee repository nor a recognized zero-base layout" >&2
+    exit 1
+  fi
+  run_clean node .github/ci-policy.mjs
+  exit 0
+fi
+
 run_clean npm ci --ignore-scripts --no-bin-links --prefix .github/policy-parser
 run_clean npm audit --audit-level=moderate --prefix .github/policy-parser
 
