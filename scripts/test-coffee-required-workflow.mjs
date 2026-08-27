@@ -457,6 +457,14 @@ test("trusted gate scans secrets, dependencies, and CodeQL without candidate cod
   assert.doesNotMatch(workflow, /^  pull_request_target:/mu);
 });
 
+test("trusted gate uses a strict scan when the candidate removes the base ignore file", () => {
+  assert.match(
+    workflow,
+    /if test -e trusted-target\/\.gitleaksignore; then\n\s+if test -e candidate\/\.gitleaksignore; then\n\s+cmp trusted-target\/\.gitleaksignore candidate\/\.gitleaksignore\n\s+ignore_path="\$GITHUB_WORKSPACE\/trusted-target\/\.gitleaksignore"\n\s+fi\n\s+else\n\s+test ! -e candidate\/\.gitleaksignore/u,
+  );
+  assert.match(workflow, /ignore_path=\/dev\/null/u);
+});
+
 test("trusted CodeQL fails closed on local SARIF findings", () => {
   const fixture = mkdtempSync(join(tmpdir(), "coffee-codeql-sarif-"));
   try {
