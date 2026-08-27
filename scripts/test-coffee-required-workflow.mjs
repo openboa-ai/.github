@@ -460,9 +460,14 @@ test("trusted gate scans secrets, dependencies, and CodeQL without candidate cod
 test("trusted gate uses a strict scan when the candidate removes the base ignore file", () => {
   assert.match(
     workflow,
-    /if test -e trusted-target\/\.gitleaksignore; then\n\s+if test -e candidate\/\.gitleaksignore; then\n\s+cmp trusted-target\/\.gitleaksignore candidate\/\.gitleaksignore\n\s+ignore_path="\$GITHUB_WORKSPACE\/trusted-target\/\.gitleaksignore"\n\s+fi\n\s+else\n\s+test ! -e candidate\/\.gitleaksignore/u,
+    /if test -e trusted-target\/\.gitleaksignore; then\n\s+if test -e candidate\/\.gitleaksignore; then\n\s+cmp trusted-target\/\.gitleaksignore candidate\/\.gitleaksignore\n\s+ignore_path="\$GITHUB_WORKSPACE\/trusted-target\/\.gitleaksignore"\n\s+fi\n\s+history_ignore_path="\$GITHUB_WORKSPACE\/trusted-target\/\.gitleaksignore"\n\s+else\n\s+test ! -e candidate\/\.gitleaksignore/u,
   );
   assert.match(workflow, /ignore_path=\/dev\/null/u);
+  assert.match(workflow, /history_ignore_path="\$GITHUB_WORKSPACE\/trusted-target\/\.gitleaksignore"/u);
+  assert.match(
+    workflow,
+    /gitleaks git --config "\$GITLEAKS_TRUSTED_CONFIG" \\\n\s+--gitleaks-ignore-path "\$history_ignore_path"/u,
+  );
 });
 
 test("trusted CodeQL fails closed on local SARIF findings", () => {

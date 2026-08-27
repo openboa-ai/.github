@@ -86,16 +86,18 @@ jobs:
           set -o pipefail
           test ! -e candidate/.gitleaks.toml
           ignore_path=/dev/null
+          history_ignore_path=/dev/null
           if test -e trusted-target/.gitleaksignore; then
             if test -e candidate/.gitleaksignore; then
               cmp trusted-target/.gitleaksignore candidate/.gitleaksignore
               ignore_path="$GITHUB_WORKSPACE/trusted-target/.gitleaksignore"
             fi
+            history_ignore_path="$GITHUB_WORKSPACE/trusted-target/.gitleaksignore"
           else
             test ! -e candidate/.gitleaksignore
           fi
           gitleaks git --config "$GITLEAKS_TRUSTED_CONFIG" \
-            --gitleaks-ignore-path "$ignore_path" --ignore-gitleaks-allow \
+            --gitleaks-ignore-path "$history_ignore_path" --ignore-gitleaks-allow \
             --redact --no-banner "$GITHUB_WORKSPACE/candidate"
           gitleaks dir --config "$GITLEAKS_TRUSTED_CONFIG" \
             --gitleaks-ignore-path "$ignore_path" --ignore-gitleaks-allow \
