@@ -87,8 +87,10 @@ jobs:
           test ! -e candidate/.gitleaks.toml
           ignore_path=/dev/null
           if test -e trusted-target/.gitleaksignore; then
-            cmp trusted-target/.gitleaksignore candidate/.gitleaksignore
-            ignore_path="$GITHUB_WORKSPACE/trusted-target/.gitleaksignore"
+            if test -e candidate/.gitleaksignore; then
+              cmp trusted-target/.gitleaksignore candidate/.gitleaksignore
+              ignore_path="$GITHUB_WORKSPACE/trusted-target/.gitleaksignore"
+            fi
           else
             test ! -e candidate/.gitleaksignore
           fi
