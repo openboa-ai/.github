@@ -50,6 +50,13 @@ run_git() {
   run_clean git -c protocol.file.allow=never -c credential.helper= "$@"
 }
 
+if test ! -f "$candidate_root/.github/uv-requirements.txt"; then
+  test ! -e "$candidate_root/.github/harbor-requirements.txt"
+  test -f "$candidate_root/iterations/README.md"
+  printf '%s\n' 'Eval Harbor calibration not applicable to the zero-base evaluator layout.'
+  exit 0
+fi
+
 test -f "$candidate_root/.github/uv-requirements.txt"
 test -f "$candidate_root/.github/harbor-requirements.txt"
 test -f "$candidate_root/src/bench.ts"
