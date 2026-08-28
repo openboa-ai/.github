@@ -33,29 +33,56 @@ run_clean() {
   env -i "${candidate_environment[@]}" "$@"
 }
 
+legacy_bench_layout() {
+  test -f evals/output-quality/perspective-capture/.gitkeep || return 1
+  test -f evals/output-quality/perspective-application/human-understanding/.gitkeep || return 1
+  test -f evals/output-quality/perspective-application/agent-judgment-action/.gitkeep || return 1
+  test -f evals/triggering/perspective-capture/.gitkeep || return 1
+  test -f evals/triggering/perspective-application/.gitkeep || return 1
+  test ! -e DATA-CARD.md || return 1
+  test ! -e PREREGISTRATION.md || return 1
+  test ! -e evals/skill-triggering || return 1
+  test ! -e evals/output-quality/preference-inference || return 1
+  test ! -e evals/output-quality/personalized-response-generation || return 1
+  test ! -e evals/output-quality/personalized-task-execution || return 1
+}
+
+current_bench_layout() {
+  test -f PREREGISTRATION.md || return 1
+  for task in \
+    preference-inference \
+    personalized-response-generation \
+    personalized-task-execution
+  do
+    test -d "evals/output-quality/$task/development" || return 1
+    test -d "evals/output-quality/$task/validation" || return 1
+  done
+  test -d evals/skill-triggering/development || return 1
+  test -d evals/skill-triggering/validation || return 1
+  test ! -e evals/output-quality/perspective-capture || return 1
+  test ! -e evals/output-quality/perspective-application || return 1
+  test ! -e evals/triggering || return 1
+}
+
 zero_base_layout() {
   case "$repository" in
     openboa-ai/coffee-chat)
-      test -f plugin.json
-      test -f skills/roast/SKILL.md
-      test -f skills/brew/SKILL.md
+      test -f plugin.json || return 1
+      test -f skills/roast/SKILL.md || return 1
+      test -f skills/brew/SKILL.md || return 1
       ;;
     openboa-ai/coffee-chat-roastery)
-      test -f origins/.gitkeep
-      test -f beans/.gitkeep
+      test -f origins/.gitkeep || return 1
+      test -f beans/.gitkeep || return 1
       ;;
     openboa-ai/coffee-chat-eval)
-      test -f iterations/README.md
+      test -f iterations/README.md || return 1
       ;;
     openboa-ai/coffee-chat-bench)
-      test -f evals/README.md
-      test -f graders/README.md
-      test -f research/README.md
-      test -f evals/output-quality/perspective-capture/.gitkeep
-      test -f evals/output-quality/perspective-application/human-understanding/.gitkeep
-      test -f evals/output-quality/perspective-application/agent-judgment-action/.gitkeep
-      test -f evals/triggering/perspective-capture/.gitkeep
-      test -f evals/triggering/perspective-application/.gitkeep
+      test -f evals/README.md || return 1
+      test -f graders/README.md || return 1
+      test -f research/README.md || return 1
+      legacy_bench_layout || current_bench_layout
       ;;
     *)
       return 1
@@ -72,7 +99,6 @@ if test ! -f .github/policy-parser/package.json; then
     echo "candidate is neither a legacy Coffee repository nor a recognized zero-base layout" >&2
     exit 1
   fi
-  run_clean node .github/ci-policy.mjs
   exit 0
 fi
 

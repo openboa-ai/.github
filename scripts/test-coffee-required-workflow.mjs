@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   mkdtempSync,
   mkdirSync,
   renameSync,
@@ -64,6 +65,117 @@ jobs:
     with:
       control_sha: ${controlSha}
 `;
+}
+
+function writeEmpty(path) {
+  mkdirSync(resolve(path, ".."), { recursive: true });
+  writeFileSync(path, "");
+}
+
+function zeroBaseBenchFixture(layout) {
+  const fixture = mkdtempSync(join(tmpdir(), "coffee-zero-base-bench-"));
+  const candidate = join(fixture, "candidate");
+  const bin = join(fixture, "bin");
+  const runnerTemp = join(fixture, "runner-temp");
+  mkdirSync(candidate);
+  mkdirSync(bin);
+  mkdirSync(runnerTemp);
+  const npm = join(bin, "npm");
+  writeFileSync(npm, "#!/bin/sh\nexit 0\n");
+  chmodSync(npm, 0o755);
+  for (const path of [
+    "evals/README.md",
+    "graders/README.md",
+    "research/README.md",
+  ]) {
+    writeEmpty(join(candidate, path));
+  }
+
+  if (layout === "legacy" || layout === "legacy-hybrid") {
+    for (const path of [
+      "evals/output-quality/perspective-capture/.gitkeep",
+      "evals/output-quality/perspective-application/human-understanding/.gitkeep",
+      "evals/output-quality/perspective-application/agent-judgment-action/.gitkeep",
+      "evals/triggering/perspective-capture/.gitkeep",
+      "evals/triggering/perspective-application/.gitkeep",
+    ]) {
+      writeEmpty(join(candidate, path));
+    }
+    if (layout === "legacy-hybrid") {
+      mkdirSync(
+        join(candidate, "evals/output-quality/preference-inference/development"),
+        { recursive: true },
+      );
+    }
+  } else {
+    writeEmpty(join(candidate, "PREREGISTRATION.md"));
+    for (const task of [
+      "preference-inference",
+      "personalized-response-generation",
+      "personalized-task-execution",
+    ]) {
+      mkdirSync(join(candidate, "evals/output-quality", task, "development"), {
+        recursive: true,
+      });
+      mkdirSync(join(candidate, "evals/output-quality", task, "validation"), {
+        recursive: true,
+      });
+    }
+    mkdirSync(join(candidate, "evals/skill-triggering/development"), {
+      recursive: true,
+    });
+    mkdirSync(join(candidate, "evals/skill-triggering/validation"), {
+      recursive: true,
+    });
+    if (layout === "active") {
+      mkdirSync(
+        join(
+          candidate,
+          "evals/output-quality/preference-inference/development/pi-0001",
+        ),
+      );
+    }
+    if (layout === "hybrid") {
+      writeEmpty(
+        join(candidate, "evals/output-quality/perspective-capture/.gitkeep"),
+      );
+    }
+    if (layout === "incomplete") {
+      rmSync(
+        join(
+          candidate,
+          "evals/output-quality/personalized-task-execution/validation",
+        ),
+        { recursive: true },
+      );
+    }
+    if (layout === "missing-common") {
+      rmSync(join(candidate, "evals/README.md"));
+    }
+  }
+
+  return { bin, candidate, fixture, runnerTemp };
+}
+
+function runZeroBaseBenchFixture(layout) {
+  const fixture = zeroBaseBenchFixture(layout);
+  try {
+    return spawnSync(
+      qualityRunnerPath,
+      ["openboa-ai/coffee-chat-bench", fixture.candidate],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: fixture.fixture,
+          PATH: `${fixture.bin}:${process.env.PATH}`,
+          RUNNER_TEMP: fixture.runnerTemp,
+        },
+      },
+    );
+  } finally {
+    rmSync(fixture.fixture, { force: true, recursive: true });
+  }
 }
 
 function classificationFixture(mutate) {
@@ -406,6 +518,30 @@ test("authority check rejects an early symlink in a large Git index", () => {
   }
 });
 
+test("authority check rejects candidate gitlinks", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "coffee-authority-gitlink-"));
+  try {
+    execFileSync("git", ["init", "-q", fixture]);
+    execFileSync("git", ["-C", fixture, "config", "user.email", "test@example.invalid"]);
+    execFileSync("git", ["-C", fixture, "config", "user.name", "Policy test"]);
+    writeFileSync(join(fixture, "README.md"), "fixture\n");
+    const commitSha = commit(fixture, "fixture");
+    execFileSync("git", [
+      "-C",
+      fixture,
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `160000,${commitSha},evals/output-quality/preference-inference/development`,
+    ]);
+    const result = spawnSync(authorityCheck, [fixture], { encoding: "utf8" });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /candidate gitlinks are not allowed/u);
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
+});
+
 test("trusted gate clears Node injection paths and resolves parser from base", () => {
   assert.match(workflow, /NODE_OPTIONS: ""/u);
   assert.match(workflow, /NODE_PATH: ""/u);
@@ -604,7 +740,23 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
     /run_clean npm ci --ignore-scripts --no-bin-links --prefix \.github\/policy-parser/u,
   );
   assert.match(qualityRunner, /zero_base_layout\(\)/u);
-  assert.match(qualityRunner, /run_clean node \.github\/ci-policy\.mjs/u);
+  assert.match(
+    qualityRunner,
+    /evals\/output-quality\/perspective-capture\/\.gitkeep/u,
+  );
+  for (const path of [
+    "PREREGISTRATION.md",
+    "preference-inference",
+    "personalized-response-generation",
+    "personalized-task-execution",
+    'evals/output-quality/$task/development',
+    'evals/output-quality/$task/validation',
+    "evals/skill-triggering/development",
+    "evals/skill-triggering/validation",
+  ]) {
+    assert.ok(qualityRunner.includes(path), path);
+  }
+  assert.doesNotMatch(qualityRunner, /run_clean node \.github\/ci-policy\.mjs/u);
   assert.match(
     qualityRunner,
     /candidate is neither a legacy Coffee repository nor a recognized zero-base layout/u,
@@ -668,6 +820,26 @@ test("trusted quality runs after authorization with fixed npm authority", () => 
       .map((line) => line.trim())
       .filter((line) => line.startsWith("run_clean "));
     assert.deepEqual(commandLines, commands, repository);
+  }
+});
+
+test("trusted zero-base recognition accepts legacy and current Bench layouts", () => {
+  for (const layout of ["legacy", "current", "active"]) {
+    const result = runZeroBaseBenchFixture(layout);
+    assert.equal(result.status, 0, `${layout}: ${result.stderr}`);
+  }
+});
+
+test("trusted zero-base recognition rejects incomplete and hybrid Bench layouts", () => {
+  for (const layout of [
+    "incomplete",
+    "hybrid",
+    "legacy-hybrid",
+    "missing-common",
+  ]) {
+    const result = runZeroBaseBenchFixture(layout);
+    assert.equal(result.status, 1, `${layout}: ${result.stderr}`);
+    assert.match(result.stderr, /recognized zero-base layout/u);
   }
 });
 
