@@ -227,14 +227,14 @@ jobs:
           persist-credentials: false
           path: candidate
       - name: Initialize CodeQL without building candidate code
-        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
         with:
           languages: javascript-typescript
           build-mode: none
           source-root: candidate
       - name: Analyze candidate data with CodeQL
         id: codeql-analyze
-        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938
         with:
           checkout_path: ${{ github.workspace }}/candidate
           output: ${{ runner.temp }}/codeql-sarif
