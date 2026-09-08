@@ -29,7 +29,7 @@ function fixture(run) {
       merge_method: "squash", merge_queue: false, required_approvals: 0,
       eligible_author_associations: ["OWNER", "MEMBER"], eligible_bot_logins: ["dependabot[bot]"],
       required_checks: [{ context: "OpenBoa Coffee trusted required / OpenBoa Coffee trusted required", integration_id: 15368 }],
-      protected_paths: ["/.github/**", "/AGENTS.md", "/CODEOWNERS", "/package.json", "/package-lock.json", "/data/**"],
+      protected_paths: ["/.github/**", "/AGENTS.md", "/SECURITY.md", "/CODEOWNERS", "/package.json", "/package-lock.json", "/data/**"],
       sensitive_review: { enforcement: "github_environment", environment: "coffee-security", required_approvals: 1, prevent_self_review: false },
     };
     json(base, ".github/merge-policy.json", policy);
@@ -54,6 +54,30 @@ function fixture(run) {
 test("policy reads data without executing candidate or requiring a base parser", () => fixture(({ base, candidate }) => {
   assert.deepEqual(validateCandidatePolicy(base, candidate), { status: "policy-passed" });
 }));
+test("security policy protection is mandatory in both trusted and candidate policies", () => {
+  for (const scope of ["both", "base", "candidate"]) for (const replacement of [undefined, "/security.md", "/docs/SECURITY.md", "./SECURITY.md", "//SECURITY.md"]) fixture(({ base, candidate, policy }) => {
+    policy.protected_paths = policy.protected_paths.filter((path) => path !== "/SECURITY.md");
+    if (replacement !== undefined) policy.protected_paths.push(replacement);
+    for (const root of scope === "both" ? [base, candidate] : [scope === "base" ? base : candidate]) json(root, ".github/merge-policy.json", policy);
+    git(candidate, "add", "-f", "--all");
+    assert.throws(() => validateCandidatePolicy(base, candidate), /protected control missing: SECURITY\.md/u);
+  });
+});
+test("root security policy edits remain sensitive with either supported path spelling", () => {
+  for (const path of ["SECURITY.md", "/SECURITY.md"]) fixture(({ base, candidate, baseSha: initialBaseSha, policy }) => {
+    policy.protected_paths = policy.protected_paths.map((entry) => entry === "/SECURITY.md" ? path : entry);
+    for (const root of [base, candidate]) json(root, ".github/merge-policy.json", policy);
+    const baseSha = path === "/SECURITY.md" ? initialBaseSha : commit(candidate);
+    write(candidate, "SECURITY.md", "Changed security guidance.\n");
+    const headSha = commit(candidate);
+    assert.equal(validateCandidatePolicy(base, candidate).status, "policy-passed");
+    for (const actor of ["owner", "dependabot[bot]"]) {
+      const result = classifyCandidate({ baseRepository: "openboa-ai/coffee-chat", headRepository: "openboa-ai/coffee-chat", actor, prAuthor: actor, trustedRoot: base, candidateRoot: candidate, baseSha, headSha });
+      assert.equal(result.sensitive, true);
+      assert.deepEqual(result.protectedChanges, ["SECURITY.md"]);
+    }
+  });
+});
 test("the PR-only wrapper is structurally exact and SHA-updatable", () => {
   for (const sha of ["a".repeat(40), "b".repeat(40)]) assert.equal(validateCandidateWorkflowDelegation(trustedWrapper(sha)), sha);
   for (const mutate of [

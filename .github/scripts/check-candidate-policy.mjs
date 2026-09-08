@@ -63,7 +63,7 @@ export function validateMergePolicy(policy) {
     assert.ok(path.length > 0 && !path.startsWith("!") && !/[\r\n\0]/u.test(path), "invalid protected path");
   }
   const normalized = policy.protected_paths.map((path) => path.replace(/^\//u, ""));
-  for (const path of [".github/**", "AGENTS.md", "CODEOWNERS", "package.json", "package-lock.json"]) {
+  for (const path of [".github/**", "AGENTS.md", "SECURITY.md", "CODEOWNERS", "package.json", "package-lock.json"]) {
     assert.ok(normalized.includes(path), `protected control missing: ${path}`);
   }
 }
