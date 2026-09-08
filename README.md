@@ -25,7 +25,7 @@ the PR author cannot supply their own independent review.
 
 ## Verify the controls
 
-Run npm run verify, actionlint .github/workflows/*.yml, shell/Node syntax checks
+Run npm run verify, actionlint (all workflow extensions), shell/Node syntax checks
 and git diff --check. scripts/test-isolation.mjs additionally exercises the real
 Docker boundary; it is explicit because unit-test containers cannot access the
 host Docker socket. The pinned installer for actionlint verifies its SHA256.

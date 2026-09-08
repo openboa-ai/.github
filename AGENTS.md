@@ -29,6 +29,6 @@ definitions. Treat every executable or policy file as a sensitive control.
   needs owner-reviewed local evidence because the old base has no self-CI.
   Never bypass old required checks to bootstrap a new pin without a scoped,
   expiring exception identifying the exact base, head and compensating checks.
-- Run `npm test`, `actionlint .github/workflows/*.yml`, `sh -n
+- Run `npm test`, `actionlint` (all workflow extensions), `sh -n
   .github/scripts/*.sh`, `node --check .github/scripts/*.mjs`, and
   `git diff --check` before merging.

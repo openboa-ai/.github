@@ -253,6 +253,31 @@ test("PR bootstrap is supplementary and cannot impersonate base-owned verificati
   assert.match(trusted, /node control\/\.github\/scripts\/run-repository-verify\.mjs/u);
   assert.doesNotMatch(trusted, /  pull_request:\n/u);
 });
+test("actual lint step includes both workflow extensions and propagates failures", () => {
+  const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
+  const block = trusted.slice(trusted.indexOf("      - name: Validate candidate workflows as data"), trusted.indexOf("      - name: Install trusted secret scanner"));
+  const run = block.match(/        run: ([\s\S]*)/u)[1].trimEnd();
+  const script = run.startsWith("|\n") ? run.slice(2).split("\n").map((line) => line.slice(10)).join("\n") : run;
+  const capture = "actionlint() { printf '%s\\0' \"$@\"; return \"$LINT_STATUS\"; }\n";
+  for (const files of [["existing.yml", "new workflow.yaml", ".hidden.yaml"], ["only.yml"], ["only.yaml"], []]) {
+    const root = mkdtempSync(join(tmpdir(), "coffee-workflow-lint-"));
+    try {
+      const paths = files.map((file) => "candidate/.github/workflows/" + file);
+      for (const path of paths) write(root, path, "on: push\n");
+      write(root, "candidate/.github/workflows/README.md", "Not a workflow.\n");
+      for (const status of [0, 23]) {
+        const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", capture + script], { cwd: root, env: { PATH: process.env.PATH, LINT_STATUS: String(status) }, encoding: "utf8" });
+        if (files.length === 0) {
+          assert.notEqual(result.status, 0);
+          assert.equal(result.stdout, "");
+        } else {
+          assert.equal(result.status, status, result.stderr);
+          assert.deepEqual(result.stdout.split("\0").slice(0, -1).sort(), ["-shellcheck=", "-pyflakes=", ...paths].sort());
+        }
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
 test("CodeQL findings and missing, malformed or symlinked SARIF fail closed", () => {
   const root = mkdtempSync(join(tmpdir(), "coffee-sarif-"));
   try {
