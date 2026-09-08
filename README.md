@@ -32,11 +32,19 @@ host Docker socket. The pinned installer for actionlint verifies its SHA256.
 The test suite covers malformed control data, protected-path removal, workflow
 spoofing, installation authority, approval and cancelled/missing job results.
 
-CI for this repository uses base-owned controls to execute candidate regressions
-in isolation. The first introduction cannot retroactively create CI on the old
-base: review local evidence, land the central change through the human gate, and
-observe main before upgrading callers. Source commits in support are full SHAs,
-not branch names. An old caller still uses its old pin on a rerun.
+Trusted CI for this repository uses base-owned controls to execute candidate
+regressions in isolation. A separate pull_request workflow runs offline,
+non-root PR regressions, including during the first introduction. Its distinct
+check is supplementary candidate evidence: it cannot issue the trusted required
+check or replace owner review of the workflow itself. It runs no candidate
+launcher on the host and receives no secrets, write token or shared cache.
+
+The first introduction cannot retroactively create the base-owned CI on the old
+base. Before requesting owner approval, require the latest PR regressions and
+Codex review, resolve their findings, and retain local isolation evidence. After
+owner-reviewed landing, observe trusted main CI before upgrading callers. Source
+commits in support are full SHAs, not branch names. An old caller still uses its
+old pin on a rerun.
 
 ## Migration and evidence
 
@@ -47,8 +55,13 @@ required-check identity are retained. Changes to those safeguards require an
 explicitly reviewed successor contract, not approval of an unrelated failure.
 
 Use .github/scripts/audit-ci-settings.mjs to inspect live settings. It is read-only
-and reports missing reviewers, protections and check sources instead of treating
-declarations as enforcement. Any initial blocked-pin exception must be scoped to
+and uses GitHub's effective main rules, including exclusions and inherited rules,
+instead of treating declarations as enforcement. Missing ruleset/bypass details
+remain unverified. CODEOWNERS keeps one location and its existing ordered routes
+as a suffix; new routes go before them so they cannot override existing owners.
+Owner additions use GitHub user/team handles; malformed tokens fail because they
+can invalidate an entire route. Comments preserve those routes. Any initial
+blocked-pin exception must be scoped to
 an exact PR/base/head/control SHA, expire, include compensating verification and
 leave all protections restored. Existing code-quality/coverage rules are not
 deleted by this rollout; their producers must be verified before claiming success.

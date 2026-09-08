@@ -1,0 +1,52 @@
+name: Organization controls PR regressions
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  regressions:
+    # Supplementary candidate evidence, never the trusted required-check identity.
+    name: Organization controls PR regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out approved authority guard
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          path: control
+      - name: Check out exact candidate data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          path: candidate
+      - name: Reject alternate candidate authority
+        run: |
+          bash control/.github/scripts/reject-candidate-authorities.sh "$GITHUB_WORKSPACE/candidate"
+          test -z "$(git -C candidate ls-files -- .gitattributes '**/.gitattributes')"
+      - name: Run regressions without host authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          resume="$(openssl rand -hex 32)"
+          trap 'printf "\n::%s::\n" "$resume"' EXIT
+          printf '::stop-commands::%s\n' "$resume"
+          git -C candidate archive --format=tar HEAD | docker run --rm --interactive \
+            --network none --user 1000:1000 --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges:true --pids-limit=256 --memory=2g --cpus=2 \
+            --tmpfs /work:rw,nosuid,nodev,size=512m,uid=1000,gid=1000 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
+            --workdir /work --env CI=true --env HOME=/tmp \
+            --env NPM_CONFIG_USERCONFIG=/tmp/npm-userconfig \
+            --env NPM_CONFIG_GLOBALCONFIG=/tmp/npm-globalconfig \
+            --env NPM_CONFIG_CACHE=/tmp/npm-cache --env NPM_CONFIG_OFFLINE=true \
+            --entrypoint /bin/sh \
+            node@sha256:be23f54a88d34e8824c741b19b91064094f92c1c97b194144bfc8b50d67258e2 \
+            -ec 'tar -xf -; git -c core.hooksPath=/dev/null init -q; git -c core.hooksPath=/dev/null add -f --all; npm --ignore-scripts run verify'

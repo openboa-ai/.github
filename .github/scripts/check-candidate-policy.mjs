@@ -68,6 +68,25 @@ export function validateMergePolicy(policy) {
   }
 }
 
+function readOwnership(root) {
+  const locations = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].filter((path) => existsSync(resolve(root, path)));
+  assert.equal(locations.length, 1, "exactly one CODEOWNERS location is required; competing authority is forbidden");
+  const path = locations[0];
+  assert.ok(lstatSync(resolve(root, path)).isFile(), "CODEOWNERS must be a regular file");
+  const bytes = readFileSync(resolve(root, path));
+  assert.ok(bytes.length < 3_000_000, "CODEOWNERS must remain below GitHub's file-size limit");
+  const text = bytes.toString("utf8");
+  assert.ok(!/[\0-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(text), "invalid CODEOWNERS control character");
+  const routes = text.split(/\r?\n/u).map((line) => line.split("#", 1)[0].trim()).filter(Boolean).map((line) => line.split(/[ \t]+/u));
+  assert.ok(routes.length, "CODEOWNERS must retain review routes");
+  for (const [, ...owners] of routes) for (const owner of owners) {
+    // These repositories use GitHub handles, not email aliases. Invalid added
+    // syntax can make GitHub discard the entire line, including retained owners.
+    assert.match(owner, /^@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)?$/u, "CODEOWNERS owners must use valid user/team handles");
+  }
+  return { path, routes };
+}
+
 export function validateCandidatePolicy(baseRoot, candidateRoot) {
   // No repository code, YAML constructors, package imports or base bootstrap is executed here.
   const records = execFileSync("git", ["-C", candidateRoot, "ls-files", "--stage", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
@@ -103,13 +122,15 @@ export function validateCandidatePolicy(baseRoot, candidateRoot) {
   const candidateIgnore = ignore(candidateRoot);
   for (const pattern of baseIgnore) assert.ok(candidateIgnore.includes(pattern), `.gitignore removed protection: ${pattern}`);
   for (const pattern of candidateIgnore.filter((line) => line.startsWith("!"))) assert.ok(baseIgnore.includes(pattern), ".gitignore cannot add exclusion overrides");
-  const ownerPath = existsSync(resolve(baseRoot, ".github/CODEOWNERS")) ? ".github/CODEOWNERS" : "CODEOWNERS";
-  const owners = (root) => readFileSync(resolve(root, ownerPath), "utf8").split("\n").filter((line) => line.trim() && !line.startsWith("#")).map((line) => line.trim().split(/\s+/u));
-  const candidateOwners = owners(candidateRoot);
-  for (const [pattern, ...reviewers] of owners(baseRoot)) {
-    const matches = candidateOwners.filter(([path]) => path === pattern);
-    assert.equal(matches.length, 1, "ownership routes cannot be missing or shadowed");
-    for (const reviewer of reviewers) assert.ok(matches[0].slice(1).includes(reviewer), `owner removed for ${pattern}`);
+  const baseOwners = readOwnership(baseRoot), candidateOwners = readOwnership(candidateRoot);
+  assert.equal(candidateOwners.path, baseOwners.path, "CODEOWNERS authority cannot move");
+  // GitHub uses the last matching route. New routes may precede the existing
+  // ordered suffix, so they cannot shadow ownership of current or future paths.
+  // No approximation of GitHub's glob grammar is needed.
+  const retainedRoutes = candidateOwners.routes.slice(-baseOwners.routes.length);
+  assert.deepEqual(retainedRoutes.map(([pattern]) => pattern), baseOwners.routes.map(([pattern]) => pattern), "existing ownership routes must remain the ordered suffix; add new routes before them");
+  for (const [index, [pattern, ...reviewers]] of baseOwners.routes.entries()) {
+    for (const reviewer of reviewers) assert.ok(retainedRoutes[index].slice(1).includes(reviewer), `owner removed for ${pattern}`);
   }
   for (const path of ["AGENTS.md", "SECURITY.md"]) assert.ok(readFileSync(resolve(candidateRoot, path), "utf8").trim(), `${path} must remain nonempty`);
   validatePackage(candidateRoot);

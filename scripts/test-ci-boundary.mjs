@@ -87,6 +87,40 @@ test("alternate authority, symlinks and gitlinks cannot cross the boundary", () 
     git(candidate, "update-index", "--add", "--cacheinfo", "160000," + baseSha + ",external"); assert.throws(() => validateCandidatePolicy(base, candidate));
   });
 });
+test("ownership precedence, competing locations and unloaded files cannot remove review routes", () => {
+  for (const mutate of [
+    ({ candidate }) => write(candidate, "CODEOWNERS", "/.github/** @owner\n* @other\n"),
+    ({ candidate }) => write(candidate, "CODEOWNERS", "/.github/** @owner\n/.github/workflows/** @other\n"),
+    ({ candidate }) => write(candidate, "CODEOWNERS", "/.github/** @owner\n/.github/workflows/**\n"),
+    ({ candidate }) => write(candidate, ".github/CODEOWNERS", "* @other\n"),
+    ({ candidate }) => write(candidate, "docs/CODEOWNERS", "* @other\n"),
+    ({ base, candidate }) => {
+      write(base, "CODEOWNERS", "* @global\n/.github/** @owner\n");
+      write(candidate, "CODEOWNERS", "/.github/** @owner\n* @global\n");
+    },
+    ({ candidate }) => write(candidate, "CODEOWNERS", "/.github/** @owner\n#" + "x".repeat(3_000_000)),
+    ({ candidate }) => write(candidate, "CODEOWNERS", "/.github/** @other # @owner\n"),
+    ({ candidate }) => write(candidate, "CODEOWNERS", "/.github/** @owner docs@\n"),
+    ({ candidate }) => write(candidate, "CODEOWNERS", "/.github/** @owner @invalid--login\n"),
+  ]) fixture((f) => {
+    mutate(f); git(f.candidate, "add", "-f", "--all");
+    assert.throws(() => validateCandidatePolicy(f.base, f.candidate));
+  });
+});
+test("ownership preserves ordered routes and supports maintainer additions and GitHub locations", () => {
+  for (const path of ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]) fixture(({ base, candidate }) => {
+    if (path !== "CODEOWNERS") for (const root of [base, candidate]) rmSync(join(root, "CODEOWNERS"));
+    write(base, path, "* @global\n/.github/** @owner\n");
+    write(candidate, path, "  # Review routes\r\n*\t@global @maintainer\r\n/.github/** @owner @maintainer # owners retained\r\n");
+    git(candidate, "add", "-f", "--all");
+    assert.equal(validateCandidatePolicy(base, candidate).status, "policy-passed");
+  });
+  fixture(({ base, candidate }) => {
+    write(candidate, "CODEOWNERS", "/new-file.md @maintainer\n/.github/** @owner\n");
+    git(candidate, "add", "-f", "--all");
+    assert.equal(validateCandidatePolicy(base, candidate).status, "policy-passed");
+  });
+});
 test("lock rejects local dependencies, missing integrity, implicit scripts and drift", () => {
   for (const mutate of [
     (pkg) => { pkg.private = false; },
@@ -140,6 +174,21 @@ test("workflow preserves trusted scans and approval ordering without product cou
   for (const match of workflow.matchAll(/uses: ([^\s]+)/gu)) assert.match(match[1], /@[0-9a-f]{40}$/u);
   assert.doesNotMatch(readFileSync(join(source, ".github/scripts/check-candidate-policy.mjs"), "utf8"), /skills\/|evals\/|iterations\/|perspective-capture|development\/|policy-parser/u);
 });
+test("PR bootstrap is supplementary and cannot impersonate base-owned verification", () => {
+  const bootstrap = readFileSync(join(source, ".github/workflows/pr-verification.yml"), "utf8");
+  const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
+  assert.match(bootstrap, /  pull_request:\n/u);
+  assert.match(bootstrap, /name: Organization controls PR regressions/u);
+  assert.doesNotMatch(bootstrap, /pull_request_target|name: Organization controls verification|secrets:|environment:|contents: write|id-token:|type=bind|docker\.sock|actions\/cache|upload-artifact|node candidate\//u);
+  for (const pattern of [/permissions: \{\}/u, /persist-credentials: false/u, /github\.event\.pull_request\.head\.sha/u, /bash control\//u, /--network none --user 1000:1000 --read-only --cap-drop=ALL/u, /--security-opt=no-new-privileges:true/u, /::stop-commands::/u, /npm --ignore-scripts run verify/u]) assert.match(bootstrap, pattern);
+  for (const match of bootstrap.matchAll(/uses: ([^\s]+)/gu)) assert.match(match[1], /@[0-9a-f]{40}$/u);
+  assert.ok(bootstrap.includes(IMAGE));
+  assert.match(trusted, /  pull_request_target:\n/u);
+  assert.match(trusted, /name: Organization controls verification/u);
+  assert.match(trusted, /github\.event\.pull_request\.base\.sha/u);
+  assert.match(trusted, /node control\/\.github\/scripts\/run-repository-verify\.mjs/u);
+  assert.doesNotMatch(trusted, /  pull_request:\n/u);
+});
 test("CodeQL findings and missing, malformed or symlinked SARIF fail closed", () => {
   const root = mkdtempSync(join(tmpdir(), "coffee-sarif-"));
   try {
@@ -169,10 +218,39 @@ test("live settings audit distinguishes declarations from enforced reviews and c
     environment: { protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "User", reviewer: { login: "owner" } }] }] },
     actions: { default_workflow_permissions: "read", can_approve_pull_request_reviews: false },
   };
+  snapshot.rulesets[0].id = 42;
+  snapshot.branchRules = snapshot.rulesets[0].rules.map((rule) => ({ ...rule, ruleset_id: 42 }));
   assert.deepEqual(auditSettings("coffee-chat-bench", snapshot).issues, []);
+  for (const exclude of [["refs/heads/main"], ["~DEFAULT_BRANCH"], ["refs/heads/m*"], ["~ALL"]]) {
+    const excluded = structuredClone(snapshot);
+    excluded.rulesets[0].conditions.ref_name.exclude = exclude;
+    // GitHub's effective-branch endpoint returns no rules for these declarations.
+    excluded.branchRules = [];
+    assert.ok(auditSettings("coffee-chat-bench", excluded).issues.includes("No active ruleset protects main."));
+  }
+  const missing = structuredClone(snapshot);
+  delete missing.branchRules;
+  assert.ok(auditSettings("coffee-chat-bench", missing).issues.includes("Effective main rules could not be verified."));
+  const incomplete = structuredClone(snapshot);
+  incomplete.rulesets = [];
+  assert.ok(auditSettings("coffee-chat-bench", incomplete).issues.includes("Applicable ruleset details could not be verified: 42"));
+  const hiddenBypass = structuredClone(snapshot);
+  delete hiddenBypass.rulesets[0].bypass_actors;
+  assert.ok(auditSettings("coffee-chat-bench", hiddenBypass).issues.includes("Applicable ruleset details could not be verified: 42"));
+  const layered = structuredClone(snapshot);
+  layered.branchRules.unshift({ type: "pull_request", ruleset_id: 43, parameters: {} }, { type: "required_status_checks", ruleset_id: 43, parameters: {} });
+  layered.rulesets.push({ id: 43, enforcement: "active", bypass_actors: [] });
+  assert.deepEqual(auditSettings("coffee-chat-bench", layered).issues, []);
+  const emptyStrict = structuredClone(layered);
+  for (const rule of emptyStrict.branchRules.filter((rule) => rule.type === "required_status_checks")) {
+    rule.parameters.strict_required_status_checks_policy = rule.ruleset_id === 43;
+    if (rule.ruleset_id === 43) rule.parameters.required_status_checks = [];
+  }
+  assert.ok(auditSettings("coffee-chat-bench", emptyStrict).issues.includes("Required checks do not require an up-to-date branch."));
   snapshot.environment.protection_rules = [];
   assert.ok(auditSettings("coffee-chat-bench", snapshot).issues.includes("coffee-security has no required reviewers."));
   snapshot.rulesets = [];
+  snapshot.branchRules = [];
   assert.ok(auditSettings("coffee-chat-bench", snapshot).issues.includes("No active ruleset protects main."));
 });
 
