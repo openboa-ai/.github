@@ -238,20 +238,18 @@ test("workflow preserves trusted scans and approval ordering without product cou
   for (const match of workflow.matchAll(/uses: ([^\s]+)/gu)) assert.match(match[1], /@[0-9a-f]{40}$/u);
   assert.doesNotMatch(readFileSync(join(source, ".github/scripts/check-candidate-policy.mjs"), "utf8"), /skills\/|evals\/|iterations\/|perspective-capture|development\/|policy-parser/u);
 });
-test("PR bootstrap is supplementary and cannot impersonate base-owned verification", () => {
-  const bootstrap = readFileSync(join(source, ".github/workflows/pr-verification.yml"), "utf8");
+test("central PR orchestration stays base-owned without a candidate bootstrap", () => {
+  // Regression coverage, not a GitHub pre-execution policy barrier.
+  assert.deepEqual(readdirSync(join(source, ".github/workflows")).filter((file) => /\.ya?ml$/u.test(file)).sort(), ["ci.yml", "coffee-trusted-gate.yml"]);
   const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
-  assert.match(bootstrap, /  pull_request:\n/u);
-  assert.match(bootstrap, /name: Organization controls PR regressions/u);
-  assert.doesNotMatch(bootstrap, /pull_request_target|name: Organization controls verification|secrets:|environment:|contents: write|id-token:|type=bind|docker\.sock|actions\/cache|upload-artifact|node candidate\//u);
-  for (const pattern of [/permissions: \{\}/u, /persist-credentials: false/u, /github\.event\.pull_request\.head\.sha/u, /bash control\//u, /--network none --user 1000:1000 --read-only --cap-drop=ALL/u, /--security-opt=no-new-privileges:true/u, /::stop-commands::/u, /npm --ignore-scripts run verify/u]) assert.match(bootstrap, pattern);
-  for (const match of bootstrap.matchAll(/uses: ([^\s]+)/gu)) assert.match(match[1], /@[0-9a-f]{40}$/u);
-  assert.ok(bootstrap.includes(IMAGE));
-  assert.match(trusted, /  pull_request_target:\n/u);
+  assert.equal(trusted.match(/^on:\n([\s\S]*?)\npermissions:/mu)[1], "  pull_request_target:\n    types: [opened, synchronize, reopened, ready_for_review]\n  push:\n    branches: [main]\n");
   assert.match(trusted, /name: Organization controls verification/u);
-  assert.match(trusted, /github\.event\.pull_request\.base\.sha/u);
+  assert.match(trusted, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.sha \}\}[\s\S]*?path: control/u);
+  assert.match(trusted, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}[\s\S]*?path: candidate/u);
   assert.match(trusted, /node control\/\.github\/scripts\/run-repository-verify\.mjs/u);
-  assert.doesNotMatch(trusted, /  pull_request:\n/u);
+  assert.doesNotMatch(trusted, /  pull_request:|node candidate\/|bash candidate\/|working-directory: candidate|continue-on-error/u);
+  for (const match of trusted.matchAll(/uses: ([^\s]+)/gu)) assert.match(match[1], /@[0-9a-f]{40}$/u);
+  assert.match(workflow, /^on:\n  workflow_call:\n/mu);
 });
 test("actual lint step includes both workflow extensions and propagates failures", () => {
   const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");

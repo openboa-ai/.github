@@ -33,18 +33,20 @@ The test suite covers malformed control data, protected-path removal, workflow
 spoofing, installation authority, approval and cancelled/missing job results.
 
 Trusted CI for this repository uses base-owned controls to execute candidate
-regressions in isolation. A separate pull_request workflow runs offline,
-non-root PR regressions, including during the first introduction. Its distinct
-check is supplementary candidate evidence: it cannot issue the trusted required
-check or replace owner review of the workflow itself. It runs no candidate
-launcher on the host and receives no secrets, write token or shared cache.
+regressions in isolation. Do not add a candidate-owned pull_request workflow as
+a bootstrap: its author can change the host-runner steps before any guard or
+container runs. The workflow inventory test detects drift during verification;
+it is not a GitHub pre-execution enforcement barrier for new workflow files.
 
-The first introduction cannot retroactively create the base-owned CI on the old
-base. Before requesting owner approval, require the latest PR regressions and
-Codex review, resolve their findings, and retain local isolation evidence. After
-owner-reviewed landing, observe trusted main CI before upgrading callers. Source
-commits in support are full SHAs, not branch names. An old caller still uses its
-old pin on a rerun.
+The first introduction cannot retroactively create base-owned CI on the old
+base. Before requesting owner approval, complete latest-head Codex review,
+resolve code findings, and retain exact-tree local regression, lint, secret-scan
+and real-isolation evidence. Report missing GitHub CI as unverified, not passing;
+do not create a substitute success check or bypass existing required checks.
+The owner must review the initial landing, including this evidence gap. After
+landing, observe trusted main CI before upgrading callers. Subsequent central
+PRs require the base-owned CI as well as Codex review. Source commits in support
+are full SHAs, not branch names. An old caller still uses its old pin on a rerun.
 
 ## Migration and evidence
 
