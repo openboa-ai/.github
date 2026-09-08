@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test scripts/test-coffee-required-workflow.mjs"
+    "test": "node --test scripts/test-ci-boundary.mjs",
+    "verify": "npm test"
   }
 }

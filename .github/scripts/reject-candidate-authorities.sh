@@ -10,6 +10,10 @@ if awk '$1 == "120000" { found = 1 } END { exit !found }' "$index_entries"; then
   echo 'candidate symlinks are not allowed across the trusted data boundary' >&2
   exit 1
 fi
+if awk '$1 == "160000" { found = 1 } END { exit !found }' "$index_entries"; then
+  echo 'candidate gitlinks are not allowed across the trusted data boundary' >&2
+  exit 1
+fi
 
 test ! -e "$candidate_root/.npmrc"
 test ! -e "$candidate_root/.github/policy-parser/.npmrc"
