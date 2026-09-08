@@ -47,13 +47,13 @@ function changedPaths(candidateRoot, baseSha, headSha) {
   return paths;
 }
 
-function trustedWrapper(controlSha) {
+export function trustedWrapper(controlSha, postMerge = false) {
   return `name: OpenBoa Coffee trusted gate
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
-
+${postMerge ? "  push:\n    branches: [main]\n" : ""}
 permissions: {}
 
 jobs:
@@ -77,7 +77,7 @@ export function validateCandidateWorkflowDelegation(source) {
     /uses: openboa-ai\/\.github\/\.github\/workflows\/coffee-trusted-gate\.yml@([0-9a-f]{40})/u,
   );
   const controlSha = match?.[1];
-  if (controlSha === undefined || source !== trustedWrapper(controlSha)) {
+  if (controlSha === undefined || (source !== trustedWrapper(controlSha) && source !== trustedWrapper(controlSha, true))) {
     throw new Error("target repository must retain the exact trusted wrapper");
   }
   return controlSha;
@@ -97,12 +97,31 @@ function requireTrustedCandidateWorkflow(candidateRoot) {
   );
 }
 
+function safePackageUpdate(trustedRoot, candidateRoot) {
+  const read = (root) => JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+  const base = read(trustedRoot);
+  const candidate = read(candidateRoot);
+  for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
+    const before = base[field] ?? {};
+    const after = candidate[field] ?? {};
+    if (JSON.stringify(Object.keys(before).sort()) !== JSON.stringify(Object.keys(after).sort())) return false;
+    for (const name of Object.keys(before)) {
+      if (!/^\\d+\\.\\d+\\.\\d+$/u.test(before[name]) || !/^\\d+\\.\\d+\\.\\d+$/u.test(after[name])) return false;
+      const a = before[name].split(".").map(Number);
+      const b = after[name].split(".").map(Number);
+      if (a[0] !== b[0] || b[1] < a[1] || (a[1] === b[1] && b[2] < a[2])) return false;
+    }
+    delete base[field];
+    delete candidate[field];
+  }
+  return JSON.stringify(base) === JSON.stringify(candidate);
+}
+
 export function classifyCandidate({
   actor,
   baseRepository,
   baseSha,
   candidateRoot,
-  exactPolicyOutcome,
   headRepository,
   headSha,
   prAuthor,
@@ -123,22 +142,19 @@ export function classifyCandidate({
   });
   const paths = changedPaths(candidateRoot, baseSha, headSha);
   const protectedChanges = paths.filter((path) =>
-    matchers.some((matcher) => matcher.test(path)),
+    matchers.some((matcher) => matcher.test(path)) || [".gitignore", ".gitattributes"].includes(path),
   );
   const dependabotPackageOnly =
-    exactPolicyOutcome === "success" &&
     actor === "dependabot[bot]" &&
     prAuthor === "dependabot[bot]" &&
     typeof baseRepository === "string" &&
     baseRepository.length > 0 &&
     headRepository === baseRepository &&
     protectedChanges.length > 0 &&
-    protectedChanges.every(
+    safePackageUpdate(trustedRoot, candidateRoot) && protectedChanges.every(
       (path) => path === "package.json" || path === "package-lock.json",
     );
-  const sensitive =
-    exactPolicyOutcome !== "success" ||
-    (protectedChanges.length > 0 && !dependabotPackageOnly);
+  const sensitive = protectedChanges.length > 0 && !dependabotPackageOnly;
   return Object.freeze({
     sensitive,
     protectedChanges: Object.freeze(protectedChanges),
@@ -152,7 +168,6 @@ function main() {
     baseRepository: process.env.BASE_REPOSITORY,
     baseSha: process.env.BASE_SHA,
     candidateRoot: process.env.CANDIDATE_ROOT,
-    exactPolicyOutcome: process.env.EXACT_POLICY_OUTCOME,
     headRepository: process.env.HEAD_REPOSITORY,
     headSha: process.env.HEAD_SHA,
     prAuthor: process.env.PR_AUTHOR,

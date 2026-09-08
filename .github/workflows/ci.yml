@@ -1,0 +1,66 @@
+name: Organization controls CI
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Organization controls verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Admit same-repository control changes
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          test "$HEAD_REPOSITORY" = "$REPOSITORY"
+          case "$ASSOCIATION" in
+            OWNER|MEMBER) ;;
+            *) test "$PR_AUTHOR" = 'dependabot[bot]'; test "$ACTOR" = 'dependabot[bot]' ;;
+          esac
+      - name: Check out approved controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          path: control
+      - name: Check out candidate data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          path: candidate
+      - name: Set up Node.js for approved controls
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Reject alternate candidate authority
+        run: bash control/.github/scripts/reject-candidate-authorities.sh "$GITHUB_WORKSPACE/candidate"
+      - name: Install pinned workflow linter
+        run: bash control/.github/scripts/install-actionlint.sh
+      - name: Validate candidate workflows as data
+        run: actionlint -shellcheck= -pyflakes= candidate/.github/workflows/*.yml
+      - name: Install trusted secret scanner
+        run: bash control/.github/scripts/install-gitleaks.sh
+      - name: Scan central history and candidate without repository configuration
+        run: |
+          gitleaks git --config "$GITLEAKS_TRUSTED_CONFIG" --gitleaks-ignore-path /dev/null --ignore-gitleaks-allow --redact --no-banner candidate
+          gitleaks dir --config "$GITLEAKS_TRUSTED_CONFIG" --gitleaks-ignore-path /dev/null --ignore-gitleaks-allow --redact --no-banner candidate
+      - name: Execute candidate regressions only in isolation
+        env:
+          NODE_OPTIONS: ""
+          NODE_PATH: ""
+        run: node control/.github/scripts/run-repository-verify.mjs "$GITHUB_WORKSPACE/candidate"
