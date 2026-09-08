@@ -15,8 +15,10 @@ evaluator implementation.
    uses its integrity-locked registry dependencies without lifecycle scripts;
    candidate programs have no network, token, host mount or runner command files.
 5. The unchanged required aggregate accepts only explicit successful results.
-   GitHub applies required checks and independent review; a main push repeats
-   verification after merge without requesting a second approval for that merge.
+   GitHub applies required checks and independent review. Target wrappers retain
+   only pull_request_target; they cannot add push or other execution triggers.
+   Post-merge observation belongs to organization-owned orchestration; the
+   target wrapper itself does not claim an automatic main-push check.
 
 Targets are coffee-chat (Product), coffee-chat-roastery (public data seed),
 coffee-chat-bench (evaluation definitions), and coffee-chat-eval (execution/evidence).
@@ -50,9 +52,9 @@ are full SHAs, not branch names. An old caller still uses its old pin on a rerun
 
 ## Migration and evidence
 
-Do not weaken a required check to change its implementation. Keep the old and new
-wrapper forms compatible, validate each target's actual base/head, then update
-the wrapper pin once. Existing protected paths, secret hooks, update policy and
+Do not weaken a required check to change its implementation. Keep the canonical
+PR-only wrapper shape unchanged, validate each target's actual base/head, then
+update only its immutable control SHA. Existing protected paths, secret hooks, update policy and
 required-check identity are retained. Changes to those safeguards require an
 explicitly reviewed successor contract, not approval of an unrelated failure.
 

@@ -54,15 +54,24 @@ function fixture(run) {
 test("policy reads data without executing candidate or requiring a base parser", () => fixture(({ base, candidate }) => {
   assert.deepEqual(validateCandidatePolicy(base, candidate), { status: "policy-passed" });
 }));
-test("old and post-merge wrappers are structurally exact and SHA-updatable", () => {
-  for (const sha of ["a".repeat(40), "b".repeat(40)]) for (const push of [false, true]) assert.equal(validateCandidateWorkflowDelegation(trustedWrapper(sha, push)), sha);
+test("the PR-only wrapper is structurally exact and SHA-updatable", () => {
+  for (const sha of ["a".repeat(40), "b".repeat(40)]) assert.equal(validateCandidateWorkflowDelegation(trustedWrapper(sha)), sha);
   for (const mutate of [
     (s) => s.replace("contents: read", "contents: write"),
     (s) => s.replace("control_sha: " + "a".repeat(40), "control_sha: " + "b".repeat(40)),
     (s) => s + "    steps:\n      - run: echo spoof\n",
     (s) => s.replace("pull_request_target:", "pull_request:"),
+    (s) => s.replace("\n\npermissions: {}", "\n  push:\n    branches: [main]\n\npermissions: {}"),
   ]) assert.throws(() => validateCandidateWorkflowDelegation(mutate(trustedWrapper("a".repeat(40)))));
-  assert.match(trustedWrapper("a".repeat(40), true), /push:\n    branches: \[main\]/u);
+});
+test("target trigger expansion fails policy and classification before approval", () => {
+  for (const trigger of ["  push:\n    branches: [main]\n", "  workflow_dispatch: {}\n", "  schedule:\n    - cron: '0 0 * * *'\n"]) fixture(({ base, candidate, baseSha }) => {
+    const expanded = trustedWrapper("a".repeat(40)).replace("\n\npermissions: {}", "\n" + trigger + "\npermissions: {}");
+    write(candidate, ".github/workflows/trusted.yml", expanded);
+    const headSha = commit(candidate);
+    assert.throws(() => validateCandidatePolicy(base, candidate), /exact trusted wrapper/u);
+    assert.throws(() => classifyCandidate({ baseRepository: "openboa-ai/coffee-chat", headRepository: "openboa-ai/coffee-chat", actor: "owner", prAuthor: "owner", trustedRoot: base, candidateRoot: candidate, baseSha, headSha }), /exact trusted wrapper/u);
+  });
 });
 test("invalid policy and removed safeguards fail rather than request approval", () => {
   for (const mutate of [

@@ -47,13 +47,13 @@ function changedPaths(candidateRoot, baseSha, headSha) {
   return paths;
 }
 
-export function trustedWrapper(controlSha, postMerge = false) {
+export function trustedWrapper(controlSha) {
   return `name: OpenBoa Coffee trusted gate
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
-${postMerge ? "  push:\n    branches: [main]\n" : ""}
+
 permissions: {}
 
 jobs:
@@ -77,7 +77,7 @@ export function validateCandidateWorkflowDelegation(source) {
     /uses: openboa-ai\/\.github\/\.github\/workflows\/coffee-trusted-gate\.yml@([0-9a-f]{40})/u,
   );
   const controlSha = match?.[1];
-  if (controlSha === undefined || (source !== trustedWrapper(controlSha) && source !== trustedWrapper(controlSha, true))) {
+  if (controlSha === undefined || source !== trustedWrapper(controlSha)) {
     throw new Error("target repository must retain the exact trusted wrapper");
   }
   return controlSha;
