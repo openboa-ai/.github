@@ -12,7 +12,10 @@ protected paths and policy evolution additionally require the solo maintainer's
 
 Candidate repositories supply only the exact inert trusted-workflow wrapper,
 never candidate steps, alternate npm authority, or symlinked control data.
-The wrapper supports PR checks and main observation without a mutable SHA pin.
+The target wrapper permits only `pull_request_target` and uses an immutable
+control SHA. Organization-owned `.github/workflows/ci.yml` observes this central
+repository's `main` branch through `push` after owner-reviewed initial landing.
+It does not add automatic main-push verification to target repositories.
 
 Authorization reads policy as data; it never imports repository validators.
 Repository-owned npm run verify executes in a separate non-root, network-disabled
