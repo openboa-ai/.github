@@ -146,6 +146,26 @@ test("Dependabot cannot change verify while posing as a package update", () => f
   const headSha = commit(candidate);
   assert.equal(classifyCandidate({ baseRepository: "openboa-ai/coffee-chat", headRepository: "openboa-ai/coffee-chat", actor: "dependabot[bot]", prAuthor: "dependabot[bot]", trustedRoot: base, candidateRoot: candidate, baseSha, headSha }).sensitive, true);
 }));
+test("Dependabot exact patch/minor bumps stay routine while major/range/downgrade changes stay sensitive", () => {
+  for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
+    for (const [version, sensitive] of [["1.2.4", false], ["1.3.0", false], ["2.0.0", true], ["1.2.2", true], ["1.1.9", true], ["^1.2.4", true]]) fixture(({ base, candidate }) => {
+      const pkg = JSON.parse(readFileSync(join(base, "package.json")));
+      pkg[field] = { dependency: "1.2.3" };
+      json(base, "package.json", pkg); json(candidate, "package.json", pkg);
+      const baseSha = commit(candidate);
+      pkg[field].dependency = version;
+      json(candidate, "package.json", pkg);
+      const headSha = commit(candidate);
+      const options = { baseRepository: "openboa-ai/coffee-chat", headRepository: "openboa-ai/coffee-chat", actor: "dependabot[bot]", prAuthor: "dependabot[bot]", trustedRoot: base, candidateRoot: candidate, baseSha, headSha };
+      assert.equal(classifyCandidate(options).sensitive, sensitive, `${field}: ${version}`);
+      if (!sensitive) {
+        assert.equal(classifyCandidate({ ...options, actor: "owner" }).sensitive, true);
+        assert.equal(classifyCandidate({ ...options, prAuthor: "owner" }).sensitive, true);
+        assert.equal(classifyCandidate({ ...options, headRepository: "outsider/coffee-chat" }).sensitive, true);
+      }
+    });
+  }
+});
 test("aggregate rejects missing, cancelled, failed and unapproved runs", () => {
   const success = () => ({ authorize: { result: "success", outputs: { sensitive: "false" } }, "dependency-review": { result: "success" }, codeql: { result: "success" }, quality: { result: "success" }, "sensitive-review": { result: "skipped" } });
   assert.equal(checkRequiredResults(success()).status, "required-checks-passed");

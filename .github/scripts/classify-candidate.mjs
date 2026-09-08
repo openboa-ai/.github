@@ -106,7 +106,7 @@ function safePackageUpdate(trustedRoot, candidateRoot) {
     const after = candidate[field] ?? {};
     if (JSON.stringify(Object.keys(before).sort()) !== JSON.stringify(Object.keys(after).sort())) return false;
     for (const name of Object.keys(before)) {
-      if (!/^\\d+\\.\\d+\\.\\d+$/u.test(before[name]) || !/^\\d+\\.\\d+\\.\\d+$/u.test(after[name])) return false;
+      if (!/^\d+\.\d+\.\d+$/u.test(before[name]) || !/^\d+\.\d+\.\d+$/u.test(after[name])) return false;
       const a = before[name].split(".").map(Number);
       const b = after[name].split(".").map(Number);
       if (a[0] !== b[0] || b[1] < a[1] || (a[1] === b[1] && b[2] < a[2])) return false;
