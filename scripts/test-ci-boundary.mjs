@@ -295,18 +295,22 @@ test("JavaScript and shell controls pass syntax checks", () => {
   }
 });
 
-test("live settings audit distinguishes declarations from enforced reviews and checks", () => {
+function auditSnapshot(repository = "coffee-chat-bench") {
   const snapshot = {
     rulesets: [{ enforcement: "active", conditions: { ref_name: { include: ["refs/heads/main"] } }, bypass_actors: [], rules: [
       ...["deletion", "non_fast_forward", "required_linear_history"].map((type) => ({ type })),
       { type: "pull_request", parameters: { require_code_owner_review: true, dismiss_stale_reviews_on_push: true, required_review_thread_resolution: true } },
-      { type: "required_status_checks", parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: "OpenBoa Coffee trusted required / OpenBoa Coffee trusted required", integration_id: 15368 }] } },
+      { type: "required_status_checks", parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: repository === ".github" ? "Organization controls verification" : "OpenBoa Coffee trusted required / OpenBoa Coffee trusted required", integration_id: 15368 }] } },
     ] }],
-    environment: { protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "User", reviewer: { login: "owner" } }] }] },
+    environment: repository === ".github" ? null : { can_admins_bypass: false, protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "User", reviewer: { login: "SonSangjoon" } }] }] },
     actions: { default_workflow_permissions: "read", can_approve_pull_request_reviews: false },
   };
   snapshot.rulesets[0].id = 42;
   snapshot.branchRules = snapshot.rulesets[0].rules.map((rule) => ({ ...rule, ruleset_id: 42 }));
+  return snapshot;
+}
+test("live settings audit distinguishes declarations from enforced reviews and checks", () => {
+  const snapshot = auditSnapshot();
   assert.deepEqual(auditSettings("coffee-chat-bench", snapshot).issues, []);
   for (const exclude of [["refs/heads/main"], ["~DEFAULT_BRANCH"], ["refs/heads/m*"], ["~ALL"]]) {
     const excluded = structuredClone(snapshot);
@@ -339,6 +343,48 @@ test("live settings audit distinguishes declarations from enforced reviews and c
   snapshot.rulesets = [];
   snapshot.branchRules = [];
   assert.ok(auditSettings("coffee-chat-bench", snapshot).issues.includes("No active ruleset protects main."));
+});
+
+test("environment audit requires the owner exclusively and verifies administrator bypass", () => {
+  const owner = { type: "User", reviewer: { login: "SonSangjoon" } };
+  const other = { type: "User", reviewer: { login: "openboa" } };
+  const team = { type: "Team", reviewer: { login: "SonSangjoon", slug: "owners" } };
+  for (const repository of ["coffee-chat", "coffee-chat-roastery", "coffee-chat-eval", "coffee-chat-bench"]) {
+    assert.deepEqual(auditSettings(repository, auditSnapshot(repository)).issues, []);
+    for (const reviewers of [[other], [team], [owner, other], [owner, team], [other, owner], [], [{}], [{ type: "User", reviewer: {} }], "not-an-array", null]) {
+      const snapshot = auditSnapshot(repository);
+      snapshot.environment.protection_rules[0].reviewers = reviewers;
+      assert.ok(auditSettings(repository, snapshot).issues.includes("coffee-security must require only User SonSangjoon."));
+    }
+    for (const bypass of [true, undefined, null, "false"]) {
+      const snapshot = auditSnapshot(repository);
+      snapshot.environment.can_admins_bypass = bypass;
+      assert.ok(auditSettings(repository, snapshot).issues.some((issue) => /administrator bypass/u.test(issue)));
+    }
+    const duplicate = auditSnapshot(repository);
+    duplicate.environment.protection_rules.push({ type: "required_reviewers", reviewers: [other] });
+    assert.ok(auditSettings(repository, duplicate).issues.includes("coffee-security must require only User SonSangjoon."));
+    const normal = auditSnapshot(repository);
+    normal.environment.protection_rules[0].reviewers[0].reviewer.login = "sonsangjoon";
+    normal.environment.protection_rules[0].prevent_self_review = true;
+    normal.environment.protection_rules.push({ type: "branch_policy" });
+    assert.deepEqual(auditSettings(repository, normal).issues, []);
+  }
+  assert.deepEqual(auditSettings(".github", auditSnapshot(".github")).issues, []);
+});
+
+test("settings audit rejects effective merge queues but ignores excluded declarations", () => {
+  for (const repository of [".github", "coffee-chat", "coffee-chat-roastery", "coffee-chat-eval", "coffee-chat-bench"]) {
+    for (const id of [42, 43]) {
+      const snapshot = auditSnapshot(repository);
+      if (id === 43) snapshot.rulesets.push({ id, enforcement: "active", bypass_actors: [] });
+      snapshot.branchRules.push({ type: "merge_queue", ruleset_id: id });
+      assert.ok(auditSettings(repository, snapshot).issues.includes("Merge queue is enabled for main."));
+    }
+    const excluded = auditSnapshot(repository);
+    excluded.rulesets.push({ id: 43, enforcement: "active", bypass_actors: [], conditions: { ref_name: { include: ["~ALL"], exclude: ["refs/heads/main"] } }, rules: [{ type: "merge_queue" }] });
+    assert.deepEqual(auditSettings(repository, excluded).issues, []);
+  }
 });
 
 test("early symlink in a large index still fails the executable authority guard", () => {

@@ -17,6 +17,7 @@ export function auditSettings(repository, { branchRules, rulesets, environment, 
   for (const type of ["deletion", "non_fast_forward", "required_linear_history"]) {
     if (!rules.some((rule) => rule.type === type)) issues.push("Missing protection: " + type);
   }
+  if (rules.some((rule) => rule.type === "merge_queue")) issues.push("Merge queue is enabled for main.");
   const pulls = rules.filter((rule) => rule.type === "pull_request").map((rule) => rule.parameters);
   if (!pulls.some((pull) => pull?.require_code_owner_review)) issues.push("Independent CODEOWNERS review is not required.");
   if (!pulls.some((pull) => pull?.dismiss_stale_reviews_on_push)) issues.push("Stale approvals are not dismissed.");
@@ -27,8 +28,18 @@ export function auditSettings(repository, { branchRules, rulesets, environment, 
   if (!checks.some((set) => set?.required_status_checks?.some((check) => check.context === context && check.integration_id === 15368))) issues.push("Required check/source is missing: " + context);
   if (active.some((rule) => rule.bypass_actors?.length)) issues.push("Ruleset has bypass actors; explicit exception review is needed.");
   if (repository !== ".github") {
-    const reviewers = environment?.protection_rules?.find((rule) => rule.type === "required_reviewers")?.reviewers ?? [];
+    const protectionRules = Array.isArray(environment?.protection_rules) ? environment.protection_rules : [];
+    const required = protectionRules.filter((rule) => rule?.type === "required_reviewers");
+    const reviewers = required.length === 1 && Array.isArray(required[0].reviewers) ? required[0].reviewers : [];
     if (!reviewers.length) issues.push("coffee-security has no required reviewers.");
+    const login = reviewers[0]?.reviewer?.login;
+    // GitHub accepts approval by any listed principal, so an additional user or
+    // team would make the documented owner's confirmation optional.
+    if (required.length !== 1 || reviewers.length !== 1 || reviewers[0]?.type !== "User" || typeof login !== "string" || login.toLowerCase() !== "sonsangjoon") {
+      issues.push("coffee-security must require only User SonSangjoon.");
+    }
+    if (environment?.can_admins_bypass === true) issues.push("coffee-security allows administrator bypass.");
+    else if (environment?.can_admins_bypass !== false) issues.push("coffee-security administrator bypass setting could not be verified.");
   }
   if (actions.default_workflow_permissions !== "read") issues.push("Default workflow token is not read-only.");
   if (actions.can_approve_pull_request_reviews !== false) issues.push("Actions are allowed to approve pull requests.");
