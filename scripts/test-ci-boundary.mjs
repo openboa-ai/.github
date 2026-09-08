@@ -8,7 +8,7 @@ import { classifyCandidate, trustedWrapper, validateCandidateWorkflowDelegation 
 import { validateCandidatePolicy, validatePackage } from "../.github/scripts/check-candidate-policy.mjs";
 import { checkCodeqlSarif } from "../.github/scripts/check-codeql-sarif.mjs";
 import { checkRequiredResults } from "../.github/scripts/check-required-results.mjs";
-import { containerArgs, IMAGE } from "../.github/scripts/run-repository-verify.mjs";
+import { containerArgs, IMAGE, repositorySnapshot } from "../.github/scripts/run-repository-verify.mjs";
 import { auditSettings } from "../.github/scripts/audit-ci-settings.mjs";
 
 const source = resolve(import.meta.dirname, "..");
@@ -187,6 +187,50 @@ test("sandbox has no verification network, host bind, socket or inherited creden
   assert.equal(args.filter((arg) => arg === "--mount").length, 1);
   assert.match(IMAGE, /^node@sha256:[0-9a-f]{64}$/u);
   assert.doesNotMatch(args.join(" "), /docker\.sock|type=bind|GITHUB_TOKEN|GITHUB_OUTPUT|--privileged|--env-file/u);
+});
+test("snapshot cannot hide archive attributes behind Git-quoted names", () => {
+  for (const directory of ["tést", "한글", "tab\tpath", "line\npath", 'quote"path', "back\\slash"]) {
+    for (const attribute of ["export-ignore", "export-subst"]) fixture(({ candidate }) => {
+      const path = `${directory}/reviewed.txt`;
+      write(candidate, path, "$Format:%H$\n");
+      write(candidate, `${directory}/.gitattributes`, `reviewed.txt ${attribute}\n`);
+      commit(candidate);
+      if (directory === "tést" && attribute === "export-ignore") {
+        const archive = execFileSync("git", ["-C", candidate, "archive", "--format=tar", git(candidate, "write-tree").trim()]);
+        assert.ok(git(candidate, "ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0").includes(path));
+        assert.notEqual(spawnSync("tar", ["-xOf", "-", path], { input: archive }).status, 0, "unguarded archive omits the reviewed file");
+      }
+      assert.throws(() => repositorySnapshot(candidate), /archive transformations are not allowed/u, JSON.stringify(directory));
+    });
+    for (const authority of [".npmrc", "npm-shrinkwrap.json"]) fixture(({ candidate }) => {
+      write(candidate, `${directory}/${authority}`, "untrusted\n");
+      commit(candidate);
+      assert.throws(() => repositorySnapshot(candidate), /alternate installation authority/u, JSON.stringify(directory));
+    });
+  }
+});
+test("snapshot preserves ordinary Unicode and control-character filenames", () => fixture(({ candidate }) => {
+  for (const path of ["한글/문서.txt", "tést/note.txt", "tab\tpath/note.txt", "line\npath/note.txt"]) write(candidate, path, "reviewed\n");
+  const comments = "# harmless comment\n".repeat(60_000);
+  write(candidate, "tést/.gitattributes", comments + "note.txt -text\n");
+  commit(candidate);
+  const snapshot = repositorySnapshot(candidate);
+  assert.equal(snapshot.tree, git(candidate, "write-tree").trim());
+  for (const path of ["한글/문서.txt", "tést/note.txt", "tab\tpath/note.txt", "line\npath/note.txt"]) {
+    assert.equal(execFileSync("tar", ["-xOf", "-", path], { input: snapshot.archive, encoding: "utf8" }), "reviewed\n");
+  }
+  write(candidate, "tést/.gitattributes", comments + "note.txt export-ignore\n");
+  commit(candidate);
+  assert.throws(() => repositorySnapshot(candidate), /archive transformations are not allowed/u);
+}));
+test("snapshot checks raw non-UTF8 path bytes without lossy decoding", { skip: process.platform !== "linux" }, () => {
+  for (const basename of [".gitattributes", ".npmrc", "npm-shrinkwrap.json"]) fixture(({ candidate }) => {
+    const directory = Buffer.concat([Buffer.from(candidate + "/raw-"), Buffer.from([0xff])]);
+    mkdirSync(directory);
+    writeFileSync(Buffer.concat([directory, Buffer.from("/" + basename)]), "* export-ignore\n");
+    commit(candidate);
+    assert.throws(() => repositorySnapshot(candidate), basename === ".gitattributes" ? /archive transformations/u : /alternate installation authority/u);
+  });
 });
 test("workflow preserves trusted scans and approval ordering without product coupling", () => {
   for (const pattern of [/gitleaks git/u, /git -C candidate cat-file blob/u, /dependency-review-action@[0-9a-f]{40}/u, /build-mode: none/u, /check-codeql-sarif.mjs/u, /environment: coffee-security/u, /needs\.sensitive-review\.result == 'success'/u, /run-repository-verify.mjs/u]) assert.match(workflow, pattern);

@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validatePackage } from "./check-candidate-policy.mjs";
@@ -22,22 +21,32 @@ export function containerArgs(volume, network, command, { user = "1000:1000", st
     IMAGE, "-ec", command];
 }
 
-export function runRepositoryVerify(root) {
+export function repositorySnapshot(root) {
   validatePackage(root);
   const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   const git = (args, options = {}) => execFileSync("git", ["-C", root, ...args], { env: gitEnv, ...options });
   git(["diff", "--exit-code"]); // Include only the staged, reviewed tree, never local scratch files.
   const tree = git(["write-tree"], { encoding: "utf8" }).trim();
-  const entries = git(["ls-tree", "-r", "--name-only", tree], { encoding: "utf8" });
-  if (/^(?:.*\/)?(?:\.npmrc|npm-shrinkwrap\.json)$/mu.test(entries)) throw Error("alternate installation authority");
-  const modes = git(["ls-tree", "-r", tree], { encoding: "utf8" });
-  for (const entry of modes.trim().split("\n")) {
-    if (!/^100(?:644|755) blob [0-9a-f]{40}\t/u.test(entry)) throw Error("snapshot contains a non-regular entry");
-  }
-  for (const file of entries.split("\n").filter((path) => /(^|\/)\.gitattributes$/u.test(path))) {
-    if (/export-ignore|export-subst/u.test(readFileSync(resolve(root, file), "utf8"))) throw Error("archive transformations are not allowed");
+  // -z disables Git's C quoting. Latin-1 preserves every pathname byte, including
+  // non-UTF8 names; only ASCII metadata, separators and basenames are interpreted.
+  const records = git(["ls-tree", "-r", "-z", tree]).toString("latin1").split("\0").filter(Boolean);
+  for (const record of records) {
+    const tab = record.indexOf("\t");
+    const metadata = record.slice(0, tab).match(/^100(?:644|755) blob ([0-9a-f]{40})$/u);
+    if (!metadata) throw Error("snapshot contains a non-regular entry");
+    const path = record.slice(tab + 1);
+    const basename = path.slice(path.lastIndexOf("/") + 1);
+    if ([".npmrc", "npm-shrinkwrap.json"].includes(basename)) throw Error("alternate installation authority");
+    if (basename === ".gitattributes" && /export-ignore|export-subst/u.test(git(["cat-file", "blob", metadata[1]], { encoding: "utf8", maxBuffer: 128 * 1024 * 1024 }))) {
+      throw Error("archive transformations are not allowed");
+    }
   }
   const archive = git(["archive", "--format=tar", tree], { maxBuffer: 128 * 1024 * 1024 });
+  return { tree, archive };
+}
+
+export function runRepositoryVerify(root) {
+  const { tree, archive } = repositorySnapshot(root);
   const volume = `coffee-verify-${randomUUID()}`;
   const resume = randomUUID();
   const docker = (args, input) => {
