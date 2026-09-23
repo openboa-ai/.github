@@ -16,6 +16,56 @@ const workflow = readFileSync(join(source, ".github/workflows/coffee-trusted-gat
 const write = (root, path, text) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
 const json = (root, path, data) => write(root, path, JSON.stringify(data, null, 2) + "\n");
 const git = (root, ...args) => execFileSync("git", ["-C", root, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+
+test("historical fixture exception is repository-, object- and digest-bound and history-only", () => {
+  const start = workflow.indexOf("          # Known historical synthetic fixture,");
+  const end = workflow.indexOf("          gitleaks git --config", start);
+  assert.ok(start > 0 && end > start);
+  const script = workflow.slice(start, end).split("\n").map((line) => line.slice(10)).join("\n");
+  const object = "fde3ff7cb1b15e85a31439588e7fa1a6252717ae:tests/runner.test.ts";
+  const digest = "c1f776ddc7450d3f483cc2011881bef245939601aa74ba8e7dd495f5b94042ea";
+  // Shell boundary tests stub Git and hashing; these are not scanner integration tests.
+  const stubs = `git() {
+    test "$*" = "-C candidate cat-file -e $EXPECTED_OBJECT" && return "$OBJECT_STATUS"
+    test "$*" = "-C candidate cat-file blob $EXPECTED_OBJECT" || return 97
+    printf '%s' inert
+  }
+  sha256sum() { cat >/dev/null; printf '%s  -\\n' "$TEST_DIGEST"; }
+  history_ignore_path="$TRUSTED_IGNORE"
+  ignore_path="$TRUSTED_IGNORE"
+  `;
+  const root = mkdtempSync(join(tmpdir(), "coffee-history-scope-"));
+  try {
+    const baseline = join(root, "trusted.ignore");
+    writeFileSync(baseline, "# pre-existing trusted policy\n");
+    for (const [repository, status, hash, expected] of [
+      ["openboa-ai/coffee-chat-eval", "0", digest, "scoped"],
+      ["openboa-ai/coffee-chat", "0", digest, "unchanged"],
+      ["outsider/coffee-chat-eval", "0", digest, "unchanged"],
+      ["openboa-ai/coffee-chat-eval", "1", digest, "unchanged"],
+      ["openboa-ai/coffee-chat-eval", "0", "0".repeat(64), "failure"],
+    ]) {
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", stubs + script + '\nprintf "%s\\n%s" "$history_ignore_path" "$ignore_path"'], {
+        env: { PATH: process.env.PATH, RUNNER_TEMP: root, BASE_REPOSITORY: repository, EXPECTED_OBJECT: object, OBJECT_STATUS: status, TEST_DIGEST: hash, TRUSTED_IGNORE: baseline }, encoding: "utf8",
+      });
+      if (expected === "failure") { assert.notEqual(result.status, 0); continue; }
+      assert.equal(result.status, 0, result.stderr);
+      const [history, current] = result.stdout.split("\n");
+      assert.equal(current, baseline);
+      assert.equal(readFileSync(baseline, "utf8"), "# pre-existing trusted policy\n");
+      if (expected === "unchanged") assert.equal(history, baseline);
+      else {
+        assert.notEqual(history, baseline);
+        assert.equal(readFileSync(history, "utf8"), "# pre-existing trusted policy\n\n" + object + ":github-pat:170\n");
+      }
+    }
+    const scans = workflow.slice(end, workflow.indexOf("      - name: Set up Node.js", end));
+    assert.equal((scans.match(/--gitleaks-ignore-path "\$history_ignore_path"/gu) || []).length, 1);
+    assert.equal((scans.match(/--gitleaks-ignore-path "\$ignore_path"/gu) || []).length, 2);
+    assert.equal((scans.match(/--ignore-gitleaks-allow/gu) || []).length, 3);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 function commit(root) {
   git(root, "add", "-f", "--all");
   git(root, "-c", "user.name=CI test", "-c", "user.email=ci@example.invalid", "commit", "-qm", "fixture");

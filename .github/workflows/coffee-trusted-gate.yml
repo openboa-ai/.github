@@ -103,6 +103,19 @@ jobs:
           else
             test ! -e candidate/.gitleaksignore
           fi
+          # Known historical synthetic fixture, documented by Eval commit 9aeb3ef1.
+          # Applies only to this immutable historical finding; never current files/raw blobs.
+          if test "$BASE_REPOSITORY" = "openboa-ai/coffee-chat-eval"; then
+            fixture_object="fde3ff7cb1b15e85a31439588e7fa1a6252717ae:tests/runner.test.ts"
+            if git -C candidate cat-file -e "$fixture_object" 2>/dev/null; then
+              fixture_digest="$(git -C candidate cat-file blob "$fixture_object" | sha256sum | cut -d' ' -f1)"
+              test "$fixture_digest" = "c1f776ddc7450d3f483cc2011881bef245939601aa74ba8e7dd495f5b94042ea"
+              scoped_history_ignore="$(mktemp "${RUNNER_TEMP:?}/coffee-eval-history.XXXXXX")"
+              cat "$history_ignore_path" > "$scoped_history_ignore"
+              printf '\n%s\n' 'fde3ff7cb1b15e85a31439588e7fa1a6252717ae:tests/runner.test.ts:github-pat:170' >> "$scoped_history_ignore"
+              history_ignore_path="$scoped_history_ignore"
+            fi
+          fi
           gitleaks git --config "$GITLEAKS_TRUSTED_CONFIG" \
             --gitleaks-ignore-path "$history_ignore_path" --ignore-gitleaks-allow \
             --redact --no-banner "$GITHUB_WORKSPACE/candidate"
