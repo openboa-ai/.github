@@ -89,26 +89,36 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
-          path: control
+      - name: Preserve approved validators outside the analysis tree
+        id: trusted-controls
+        run: |
+          trusted_controls="$(mktemp -d "${RUNNER_TEMP:?}/central-codeql-controls.XXXXXX")"
+          trusted_controls="$(cd "$trusted_controls" && pwd -P)"
+          cp .github/scripts/reject-candidate-authorities.sh "$trusted_controls/"
+          cp .github/scripts/check-codeql-sarif.mjs "$trusted_controls/"
+          printf 'directory=%s\n' "$trusted_controls" >> "$GITHUB_OUTPUT"
       - name: Check out exact candidate source as inert data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-          path: candidate
+          clean: true
       - name: Reject alternate candidate authority
-        run: bash control/.github/scripts/reject-candidate-authorities.sh "$GITHUB_WORKSPACE/candidate"
+        env:
+          TRUSTED_CONTROLS: ${{ steps.trusted-controls.outputs.directory }}
+        run: bash "$TRUSTED_CONTROLS/reject-candidate-authorities.sh" "$GITHUB_WORKSPACE"
       - name: Initialize CodeQL without building candidate code
         uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
-          source-root: candidate
+          # Analyze invokes extractors from GITHUB_WORKSPACE, independently of source-root.
+          source-root: ${{ github.workspace }}
       - name: Analyze the exact candidate with CodeQL
         id: codeql-analyze
         uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
         with:
-          checkout_path: ${{ github.workspace }}/candidate
+          checkout_path: ${{ github.workspace }}
           output: ${{ runner.temp }}/codeql-sarif
           category: /language:${{ matrix.language }}
           ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}
@@ -117,8 +127,9 @@ jobs:
         env:
           NODE_OPTIONS: ""
           NODE_PATH: ""
+          TRUSTED_CONTROLS: ${{ steps.trusted-controls.outputs.directory }}
         run: >-
-          node control/.github/scripts/check-codeql-sarif.mjs
+          node "$TRUSTED_CONTROLS/check-codeql-sarif.mjs"
           '${{ steps.codeql-analyze.outputs.sarif-output }}'
 
   required:
