@@ -5,6 +5,9 @@ Each Coffee Chat repository answers whether its own product or data is correct.
 Neither requires the center to know Product Skills, benchmark folders, or an
 evaluator implementation.
 
+[The proposed solo-agent successor](docs/solo-agent-sdlc.md) is a design draft.
+Existing controls, review requirements, and approval gates remain in force.
+
 ## Ownership and execution
 
 1. An exact, inert wrapper selects this reusable workflow by immutable SHA.
@@ -15,15 +18,16 @@ evaluator implementation.
    uses its integrity-locked registry dependencies without lifecycle scripts;
    candidate programs have no network, token, host mount or runner command files.
 5. The unchanged required aggregate accepts only explicit successful results.
-   GitHub applies required checks and independent review. Target wrappers retain
-   only pull_request_target; they cannot add push or other execution triggers.
+   GitHub applies the configured required checks and review requirements. Target
+   wrappers retain only pull_request_target; they cannot add push or other
+   execution triggers.
    Post-merge observation belongs to organization-owned orchestration; the
    target wrapper itself does not claim an automatic main-push check.
 
 Targets are coffee-chat (Product), coffee-chat-roastery (public data seed),
 coffee-chat-bench (evaluation definitions), and coffee-chat-eval (execution/evidence).
 The project owner is SonSangjoon. Existing team ownership remains in CODEOWNERS;
-the PR author cannot supply their own independent review.
+multiple listed accounts do not establish an independent reviewer.
 
 ## Verify the controls
 
