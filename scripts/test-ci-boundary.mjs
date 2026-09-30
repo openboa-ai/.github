@@ -367,7 +367,7 @@ test("central CodeQL remains inert, base-controlled and attributed to the exact 
   assert.match(scanner, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.sha \}\}/u);
   assert.match(scanner, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}\n          persist-credentials: false\n          clean: true/u);
   assert.doesNotMatch(scanner, /\n          path:/u);
-  assert.match(scanner, /bash "\$TRUSTED_CONTROLS\/reject-candidate-authorities\.sh" "\$GITHUB_WORKSPACE"/u);
+  assert.doesNotMatch(scanner, /(?:bash|cp) .*reject-candidate-authorities\.sh/u);
   assert.match(scanner, /languages: \$\{\{ matrix\.language \}\}\n          build-mode: none/u);
   assert.match(scanner, /source-root: \$\{\{ github\.workspace \}\}/u);
   assert.match(scanner, /checkout_path: \$\{\{ github\.workspace \}\}\n/u);
@@ -379,26 +379,67 @@ test("central CodeQL remains inert, base-controlled and attributed to the exact 
     if (!job.startsWith("codeql:\n")) assert.doesNotMatch(job, /security-events: write/u);
   }
 });
-test("CodeQL root checkout preserves only base validators outside the candidate source tree", () => {
+function centralCodeqlAuthorityGuard() {
   const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
   const scanner = trusted.slice(trusted.indexOf("\n  codeql:\n"), trusted.indexOf("\n  required:\n"));
-  const step = scanner.slice(scanner.indexOf("      - name: Preserve approved validators"), scanner.indexOf("      - name: Check out exact candidate source"));
+  const step = scanner.slice(scanner.indexOf("      - name: Reject alternate candidate authority"), scanner.indexOf("      - name: Initialize CodeQL"));
+  return step.split("        run: |\n")[1].trimEnd().split("\n").map((line) => line.slice(10)).join("\n");
+}
+test("inline CodeQL authority guard stays in parity and rejects alternate authority", () => {
+  const guard = centralCodeqlAuthorityGuard();
+  const canonical = readFileSync(join(source, ".github/scripts/reject-candidate-authorities.sh"), "utf8")
+    .replace(/^#![^\n]+\n/u, "").trim()
+    .replace('candidate_root="${1:?candidate repository root is required}"', 'candidate_root="${GITHUB_WORKSPACE:?candidate repository root is required}"');
+  assert.equal(guard, canonical);
+  const root = mkdtempSync(join(tmpdir(), "central inline authority "));
+  try {
+    for (const kind of ["valid", "symlink", "gitlink", ".npmrc", ".github/policy-parser/.npmrc", "npm-shrinkwrap.json", "package.json", "package-lock.json", "missing-root", "non-git-root"]) {
+      const workspace = join(root, kind.replaceAll("/", "_"));
+      mkdirSync(workspace);
+      git(workspace, "init", "-q");
+      write(workspace, "tracked.txt", "candidate data\n");
+      write(workspace, ".github/scripts/reject-candidate-authorities.sh", "exit 91\n");
+      const head = commit(workspace);
+      if (kind === "symlink") { symlinkSync("tracked.txt", join(workspace, "link")); git(workspace, "add", "link"); }
+      if (kind === "gitlink") git(workspace, "update-index", "--add", "--cacheinfo", "160000," + head + ",nested");
+      if ([".npmrc", ".github/policy-parser/.npmrc", "npm-shrinkwrap.json"].includes(kind)) write(workspace, kind, "alternate authority\n");
+      if (["package.json", "package-lock.json"].includes(kind)) symlinkSync("missing", join(workspace, kind));
+      const candidateRoot = kind === "missing-root" ? join(workspace, "missing") : kind === "non-git-root" ? root : workspace;
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], {
+        cwd: workspace,
+        env: { PATH: process.env.PATH, GITHUB_WORKSPACE: candidateRoot },
+        encoding: "utf8",
+      });
+      assert.equal(result.status === 0, kind === "valid", `${kind}: ${result.stderr}`);
+    }
+    assert.notEqual(spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], { env: { PATH: process.env.PATH } }).status, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test("CodeQL root checkout preserves only the base SARIF validator outside the candidate source tree", () => {
+  const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
+  const scanner = trusted.slice(trusted.indexOf("\n  codeql:\n"), trusted.indexOf("\n  required:\n"));
+  const step = scanner.slice(scanner.indexOf("      - name: Preserve approved SARIF validator"), scanner.indexOf("      - name: Check out exact candidate source"));
   const script = step.split("        run: |\n")[1].trimEnd().split("\n").map((line) => line.slice(10)).join("\n");
   // Match the runner's canonical temp path, including on macOS /var -> /private/var.
   const root = realpathSync(mkdtempSync(join(tmpdir(), "central-codeql-layout-")));
   const workspace = join(root, "workspace");
   const runnerTemp = join(root, "runner-temp");
-  const helperNames = ["check-codeql-sarif.mjs", "reject-candidate-authorities.sh"];
+  const helperNames = ["check-codeql-sarif.mjs"];
+  const candidateHelpers = [...helperNames, "reject-candidate-authorities.sh"];
+  const guard = centralCodeqlAuthorityGuard();
+  const checkAuthority = () => spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], {
+    cwd: workspace, env: { PATH: process.env.PATH, GITHUB_WORKSPACE: workspace },
+  });
   try {
     mkdirSync(workspace); mkdirSync(runnerTemp);
     const runnerTempAlias = join(root, "runner-temp-alias");
     symlinkSync(runnerTemp, runnerTempAlias);
     git(workspace, "init", "-q");
-    for (const name of helperNames) write(workspace, ".github/scripts/" + name, readFileSync(join(source, ".github/scripts", name), "utf8"));
+    for (const name of candidateHelpers) write(workspace, ".github/scripts/" + name, readFileSync(join(source, ".github/scripts", name), "utf8"));
     write(workspace, "base-only.mjs", "throw Error('base-only source must not be extracted');\n");
     const base = commit(workspace);
     rmSync(join(workspace, "base-only.mjs"));
-    for (const name of helperNames) write(workspace, ".github/scripts/" + name, "echo candidate helper must not execute >&2; exit 91\n");
+    for (const name of candidateHelpers) write(workspace, ".github/scripts/" + name, "echo candidate helper must not execute >&2; exit 91\n");
     write(workspace, "candidate.mjs", "export const candidate = true;\n");
     write(workspace, ".github/workflows/candidate.yml", "name: Candidate\non: push\njobs: {}\n");
     const candidate = commit(workspace);
@@ -423,14 +464,14 @@ test("CodeQL root checkout preserves only base validators outside the candidate 
     ]);
     assert.deepEqual(readdirSync(workspace).sort(), [".git", ".github", "candidate.mjs"]);
     for (const name of helperNames) assert.equal(readFileSync(join(controls, name), "utf8"), readFileSync(join(source, ".github/scripts", name), "utf8"));
-    assert.equal(spawnSync("bash", [join(controls, "reject-candidate-authorities.sh"), workspace]).status, 0);
+    assert.equal(checkAuthority().status, 0);
     const sarif = join(runnerTemp, "sarif");
     json(sarif, "actions.sarif", { version: "2.1.0", runs: [{ tool: { driver: { name: "CodeQL" } }, results: [] }] });
     assert.equal(spawnSync(process.execPath, [join(controls, "check-codeql-sarif.mjs"), sarif]).status, 0);
     json(sarif, "actions.sarif", { version: "2.1.0", runs: [{ tool: { driver: { name: "CodeQL" } }, results: [{ message: { text: "finding" } }] }] });
     assert.notEqual(spawnSync(process.execPath, [join(controls, "check-codeql-sarif.mjs"), sarif]).status, 0);
     symlinkSync("candidate.mjs", join(workspace, "escape")); git(workspace, "add", "--all");
-    assert.notEqual(spawnSync("bash", [join(controls, "reject-candidate-authorities.sh"), workspace]).status, 0);
+    assert.notEqual(checkAuthority().status, 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 test("central required check rejects failed, cancelled, skipped and missing lanes", () => {
@@ -570,6 +611,9 @@ test("early symlink in a large index still fails the executable authority guard"
     for (let i = 0; i < 5000; i++) write(root, "bulk/" + i, "x");
     git(root, "add", "--all");
     assert.notEqual(spawnSync("bash", [join(source, ".github/scripts/reject-candidate-authorities.sh"), root]).status, 0);
+    assert.notEqual(spawnSync("bash", ["-e", "-o", "pipefail", "-c", centralCodeqlAuthorityGuard()], {
+      cwd: root, env: { PATH: process.env.PATH, GITHUB_WORKSPACE: root },
+    }).status, 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
