@@ -1,4 +1,4 @@
-# Keep existing team ownership; add both maintainer accounts for independent review.
+# Retain existing ownership routes; multiple handles do not establish independent review.
 * @SonSangjoon @openboa
 /.github/** @openboa-ai/security-maintainers @SonSangjoon @openboa
 /.npmrc @openboa-ai/security-maintainers @SonSangjoon @openboa
