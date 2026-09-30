@@ -10,7 +10,7 @@ permissions: {}
 
 jobs:
   verify:
-    name: Organization controls verification
+    name: Trusted central policy and isolated verification
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -69,3 +69,70 @@ jobs:
           NODE_OPTIONS: ""
           NODE_PATH: ""
         run: node control/.github/scripts/run-repository-verify.mjs "$GITHUB_WORKSPACE/candidate"
+
+  codeql:
+    name: Trusted central CodeQL (${{ matrix.language }})
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - name: Check out approved controls
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          path: control
+      - name: Check out exact candidate source as inert data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          path: candidate
+      - name: Reject alternate candidate authority
+        run: bash control/.github/scripts/reject-candidate-authorities.sh "$GITHUB_WORKSPACE/candidate"
+      - name: Initialize CodeQL without building candidate code
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          source-root: candidate
+      - name: Analyze the exact candidate with CodeQL
+        id: codeql-analyze
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3
+        with:
+          checkout_path: ${{ github.workspace }}/candidate
+          output: ${{ runner.temp }}/codeql-sarif
+          category: /language:${{ matrix.language }}
+          ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.ref }}
+          sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Fail closed on CodeQL findings
+        env:
+          NODE_OPTIONS: ""
+          NODE_PATH: ""
+        run: >-
+          node control/.github/scripts/check-codeql-sarif.mjs
+          '${{ steps.codeql-analyze.outputs.sarif-output }}'
+
+  required:
+    name: Organization controls verification
+    if: ${{ always() }}
+    needs: [verify, codeql]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require trusted admission, isolated verification and every CodeQL language
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+        run: |
+          test "$VERIFY_RESULT" = success
+          test "$CODEQL_RESULT" = success

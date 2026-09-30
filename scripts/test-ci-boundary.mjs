@@ -359,6 +359,40 @@ test("actual lint step includes both workflow extensions and propagates failures
     } finally { rmSync(root, { recursive: true, force: true }); }
   }
 });
+test("central CodeQL remains inert, base-controlled and attributed to the exact candidate", () => {
+  const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
+  const scanner = trusted.slice(trusted.indexOf("\n  codeql:\n"), trusted.indexOf("\n  required:\n"));
+  assert.match(scanner, /needs: verify/u);
+  assert.match(scanner, /fail-fast: false\n      matrix:\n        language: \[javascript-typescript, actions\]/u);
+  assert.match(scanner, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.sha \}\}[\s\S]*?path: control/u);
+  assert.match(scanner, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}[\s\S]*?path: candidate/u);
+  assert.match(scanner, /bash control\/\.github\/scripts\/reject-candidate-authorities\.sh/u);
+  assert.match(scanner, /languages: \$\{\{ matrix\.language \}\}\n          build-mode: none\n          source-root: candidate/u);
+  assert.match(scanner, /ref: \$\{\{ github\.event_name == 'pull_request_target' && format\('refs\/pull\/\{0\}\/head', github\.event\.pull_request\.number\) \|\| github\.ref \}\}\n          sha: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/u);
+  assert.match(scanner, /node control\/\.github\/scripts\/check-codeql-sarif\.mjs/u);
+  assert.doesNotMatch(scanner, /autobuild|npm |node candidate\/|bash candidate\/|working-directory: candidate|config-file:|continue-on-error/u);
+  assert.equal((trusted.match(/security-events: write/gu) || []).length, 1);
+  for (const job of trusted.split(/\n  (?=[a-z]+:\n)/u)) {
+    if (!job.startsWith("codeql:\n")) assert.doesNotMatch(job, /security-events: write/u);
+  }
+});
+test("central required check rejects failed, cancelled, skipped and missing lanes", () => {
+  const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
+  const aggregate = trusted.slice(trusted.indexOf("\n  required:\n"));
+  assert.match(aggregate, /name: Organization controls verification\n    if: \$\{\{ always\(\) \}\}\n    needs: \[verify, codeql\]/u);
+  assert.match(aggregate, /permissions: \{\}/u);
+  assert.equal((trusted.match(/name: Organization controls verification\n/gu) || []).length, 1);
+  const script = aggregate.split("        run: |\n")[1].split("\n").map((line) => line.slice(10)).join("\n");
+  for (const verify of ["success", "failure", "cancelled", "skipped", undefined]) {
+    for (const codeql of ["success", "failure", "cancelled", "skipped", undefined]) {
+      const env = { PATH: process.env.PATH };
+      if (verify !== undefined) env.VERIFY_RESULT = verify;
+      if (codeql !== undefined) env.CODEQL_RESULT = codeql;
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], { env });
+      assert.equal(result.status === 0, verify === "success" && codeql === "success", `${verify}/${codeql}`);
+    }
+  }
+});
 test("CodeQL findings and missing, malformed or symlinked SARIF fail closed", () => {
   const root = mkdtempSync(join(tmpdir(), "coffee-sarif-"));
   try {
