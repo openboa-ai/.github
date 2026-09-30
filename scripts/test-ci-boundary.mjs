@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -364,17 +364,74 @@ test("central CodeQL remains inert, base-controlled and attributed to the exact 
   const scanner = trusted.slice(trusted.indexOf("\n  codeql:\n"), trusted.indexOf("\n  required:\n"));
   assert.match(scanner, /needs: verify/u);
   assert.match(scanner, /fail-fast: false\n      matrix:\n        language: \[javascript-typescript, actions\]/u);
-  assert.match(scanner, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.sha \}\}[\s\S]*?path: control/u);
-  assert.match(scanner, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}[\s\S]*?path: candidate/u);
-  assert.match(scanner, /bash control\/\.github\/scripts\/reject-candidate-authorities\.sh/u);
-  assert.match(scanner, /languages: \$\{\{ matrix\.language \}\}\n          build-mode: none\n          source-root: candidate/u);
+  assert.match(scanner, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.sha \}\}/u);
+  assert.match(scanner, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}\n          persist-credentials: false\n          clean: true/u);
+  assert.doesNotMatch(scanner, /\n          path:/u);
+  assert.match(scanner, /bash "\$TRUSTED_CONTROLS\/reject-candidate-authorities\.sh" "\$GITHUB_WORKSPACE"/u);
+  assert.match(scanner, /languages: \$\{\{ matrix\.language \}\}\n          build-mode: none/u);
+  assert.match(scanner, /source-root: \$\{\{ github\.workspace \}\}/u);
+  assert.match(scanner, /checkout_path: \$\{\{ github\.workspace \}\}\n/u);
   assert.match(scanner, /ref: \$\{\{ github\.event_name == 'pull_request_target' && format\('refs\/pull\/\{0\}\/head', github\.event\.pull_request\.number\) \|\| github\.ref \}\}\n          sha: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/u);
-  assert.match(scanner, /node control\/\.github\/scripts\/check-codeql-sarif\.mjs/u);
+  assert.match(scanner, /node "\$TRUSTED_CONTROLS\/check-codeql-sarif\.mjs"/u);
   assert.doesNotMatch(scanner, /autobuild|npm |node candidate\/|bash candidate\/|working-directory: candidate|config-file:|continue-on-error/u);
   assert.equal((trusted.match(/security-events: write/gu) || []).length, 1);
   for (const job of trusted.split(/\n  (?=[a-z]+:\n)/u)) {
     if (!job.startsWith("codeql:\n")) assert.doesNotMatch(job, /security-events: write/u);
   }
+});
+test("CodeQL root checkout preserves only base validators outside the candidate source tree", () => {
+  const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
+  const scanner = trusted.slice(trusted.indexOf("\n  codeql:\n"), trusted.indexOf("\n  required:\n"));
+  const step = scanner.slice(scanner.indexOf("      - name: Preserve approved validators"), scanner.indexOf("      - name: Check out exact candidate source"));
+  const script = step.split("        run: |\n")[1].trimEnd().split("\n").map((line) => line.slice(10)).join("\n");
+  // Match the runner's canonical temp path, including on macOS /var -> /private/var.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "central-codeql-layout-")));
+  const workspace = join(root, "workspace");
+  const runnerTemp = join(root, "runner-temp");
+  const helperNames = ["check-codeql-sarif.mjs", "reject-candidate-authorities.sh"];
+  try {
+    mkdirSync(workspace); mkdirSync(runnerTemp);
+    const runnerTempAlias = join(root, "runner-temp-alias");
+    symlinkSync(runnerTemp, runnerTempAlias);
+    git(workspace, "init", "-q");
+    for (const name of helperNames) write(workspace, ".github/scripts/" + name, readFileSync(join(source, ".github/scripts", name), "utf8"));
+    write(workspace, "base-only.mjs", "throw Error('base-only source must not be extracted');\n");
+    const base = commit(workspace);
+    rmSync(join(workspace, "base-only.mjs"));
+    for (const name of helperNames) write(workspace, ".github/scripts/" + name, "echo candidate helper must not execute >&2; exit 91\n");
+    write(workspace, "candidate.mjs", "export const candidate = true;\n");
+    write(workspace, ".github/workflows/candidate.yml", "name: Candidate\non: push\njobs: {}\n");
+    const candidate = commit(workspace);
+    git(workspace, "checkout", "-q", base);
+    const output = join(runnerTemp, "output");
+    const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
+      cwd: workspace, env: { PATH: process.env.PATH, RUNNER_TEMP: runnerTempAlias, GITHUB_OUTPUT: output }, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const controls = readFileSync(output, "utf8").trim().replace(/^directory=/u, "");
+    assert.ok(controls.startsWith(runnerTemp + "/"));
+    assert.ok(!controls.startsWith(workspace + "/"));
+    assert.deepEqual(readdirSync(controls).sort(), helperNames);
+    write(workspace, "untracked-base-only.mjs", "throw Error('untracked base source');\n");
+    // Match checkout's clean/reset behavior before the exact candidate checkout.
+    git(workspace, "clean", "-ffdx"); git(workspace, "reset", "--hard", "HEAD");
+    git(workspace, "checkout", "--force", "-q", candidate);
+    assert.equal(git(workspace, "status", "--porcelain"), "");
+    assert.equal(git(workspace, "rev-parse", "HEAD").trim(), candidate);
+    assert.deepEqual(git(workspace, "ls-files").trim().split("\n"), [
+      ".github/scripts/check-codeql-sarif.mjs", ".github/scripts/reject-candidate-authorities.sh", ".github/workflows/candidate.yml", "candidate.mjs",
+    ]);
+    assert.deepEqual(readdirSync(workspace).sort(), [".git", ".github", "candidate.mjs"]);
+    for (const name of helperNames) assert.equal(readFileSync(join(controls, name), "utf8"), readFileSync(join(source, ".github/scripts", name), "utf8"));
+    assert.equal(spawnSync("bash", [join(controls, "reject-candidate-authorities.sh"), workspace]).status, 0);
+    const sarif = join(runnerTemp, "sarif");
+    json(sarif, "actions.sarif", { version: "2.1.0", runs: [{ tool: { driver: { name: "CodeQL" } }, results: [] }] });
+    assert.equal(spawnSync(process.execPath, [join(controls, "check-codeql-sarif.mjs"), sarif]).status, 0);
+    json(sarif, "actions.sarif", { version: "2.1.0", runs: [{ tool: { driver: { name: "CodeQL" } }, results: [{ message: { text: "finding" } }] }] });
+    assert.notEqual(spawnSync(process.execPath, [join(controls, "check-codeql-sarif.mjs"), sarif]).status, 0);
+    symlinkSync("candidate.mjs", join(workspace, "escape")); git(workspace, "add", "--all");
+    assert.notEqual(spawnSync("bash", [join(controls, "reject-candidate-authorities.sh"), workspace]).status, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 test("central required check rejects failed, cancelled, skipped and missing lanes", () => {
   const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
