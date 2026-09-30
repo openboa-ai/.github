@@ -39,7 +39,10 @@ Observed `mergeable: true` and `mergeableState: "clean"` are aggregate platform
 readiness, checked in addition to native run/job results and unchanged native
 rule configuration. Unknown/dirty/blocked/behind/unstable states deny. A future
 separately authorized merge caller must freshly re-read identities and readiness,
-use the exact expected head, and obey the native rules without bypass. There is
+use its actual write credential to recollect current-principal bypass evidence,
+use the exact expected head, and obey the native rules without bypass. A report
+collected using a read-only GITHUB_TOKEN cannot establish a future writer's
+bypass capability; its credential-purpose marker is not a portable identity. There is
 no merger or standing auto-merge authorization in this change. Owner confirmation
 and arbitrary `manualOverride` properties cannot make failed evidence pass.
 
@@ -105,13 +108,13 @@ Snapshot fields:
 | Field | Shape/semantics |
 | --- | --- |
 | `version` | `1` |
-| `collection` | `{status:"completed", drift:false, errors:[], blockers:[]}` only after successful bounded collection |
+| `collection` | `{status:"completed", drift:false, errors:[], blockers:[], principal:{kind:"current-request-credential",scope:"report-only-collector"}}` only after successful bounded collection |
 | `collectedAt`, `evaluationTime` | Trusted caller epoch milliseconds; evaluation clock does not come from candidate data |
 | `selection` | `{status:"verified", pullRequestNumber, baseSha, headSha, testedSha, runs:[{role,id,attempt:1,latestAttempt:1}], platformGate:{id,attempt:1,latestAttempt:1}}`; platform-authenticated current PR/test merge/run selection, not static policy |
 | `repository` | `{id,fullName,visibility:"public",defaultBranchSha}`; private Free is ineligible |
 | `pullRequest` | `{number,state:"open",draft:false,baseSha,headSha,headRepositoryId,baseAncestorOfHead:true,changedFiles,mergeable:true,mergeableState:"clean"}` |
 | `controlSha` | Actual trusted controller revision, must match static policy |
-| `rules` | `{complete:true,enforcement:"active",requirePullRequest:true,strictRequiredChecks:true,bypassActors:[],requiredChecks,codeQuality:"errors",codeScanning:{tool:"CodeQL",securityThreshold:"high_or_higher",alertsThreshold:"errors"}}` |
+| `rules` | `{complete:true,enforcement:"active",requirePullRequest:true,strictRequiredChecks:true,applicableRulesets,currentPrincipalBypass,requiredChecks,codeQuality:"errors",codeScanning:{tool:"CodeQL",securityThreshold:"high_or_higher",alertsThreshold:"errors"}}` |
 | `scope` | `allowlisted-documentation`; declaration is independently verified from files |
 | `files` | `{complete:true,treeComplete:true,treesTruncated:false,totalCount,pages,entries}`; 1–100 files, count exactly matches PR changed-file count and entries |
 | `pages` | Sequential `{number,count,bodySha256}`; counts sum to total; collector must prove no omitted pages from real pagination/trees, not manufacture metadata |
@@ -120,6 +123,30 @@ Snapshot fields:
 | `runs` | Exactly CI/CodeQL/convention observations described below |
 | `platformGate` | Separate native run observation described below |
 | `sarif` | Exactly one raw report envelope per required CodeQL language |
+
+`rules.applicableRulesets` is the complete deduplicated active/applicable set
+from the effective branch rules, as `{id,sourceType,source}` entries. Repository
+sources must match the selected repository; organization sources must match its
+owner. `rules.currentPrincipalBypass` is
+`{status:"verified",principal,rulesets:[{initial,final}]}` with exact coverage of
+that set. Each initial/final detail is
+`{id,sourceType,source,enforcement:"active",currentUserCanBypass:"never",request}`.
+Each request is `{method:"GET",route:"/repos/OWNER/REPO/rulesets/ID",status:200,bodyDigest,principal}`.
+The initial/final response SHA-256 digests must match. IDs, sources, enforcement,
+explicit bypass outcomes and provenance must all agree; missing, extra,
+duplicate, unknown or changed evidence denies.
+
+Every `principal` is exactly
+`{kind:"current-request-credential",scope:"report-only-collector"}`. This names
+the current authenticated collector request credential's purpose, not a user,
+installation identity or token fingerprint. One API client with the same actual
+credential must make both detail reads; that is a trusted collector execution
+invariant, not cryptographic proof supplied by this marker. The actual REST field
+is `current_user_can_bypass`; the adapter maps it to `currentUserCanBypass`.
+Omitted global `bypass_actors` data does not imply an empty list, and visible owner
+bypass entries do not contradict an explicit `never` for the current collector.
+This proves neither global absence of bypass actors nor any future merge
+credential's authority. Do not place token contents or fingerprints in artifacts.
 
 Every repository run is
 `{role,id,repositoryId,workflowId,path,event,attempt,latestAttempt,baseSha,headSha,controlSha,status,conclusion,jobsComplete,totalJobs,jobs,sourceProof}`.

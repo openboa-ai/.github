@@ -6,6 +6,7 @@ import { evaluateMergeEvidence } from "../lib/evaluate-merge-evidence.mjs";
 
 const sha = (character) => character.repeat(40);
 const digest = (value) => createHash("sha256").update(value).digest("hex");
+const principal = () => ({ kind: "current-request-credential", scope: "report-only-collector" });
 const job = (role, name, steps) => ({ role, name, steps });
 // Real public topology and step names; all identifiers/content of observations below are synthetic.
 function fixture() {
@@ -36,16 +37,20 @@ function fixture() {
     controlClosure: [".github/workflows/ci.yml", ".github/workflows/codeql.yml", ".github/workflows/pr-convention.yml", ".github/workflows/dependency-audit.yml", "scripts/validate-ci-policy.mjs"].map((path) => ({ path, sha256: digest(`synthetic trusted bytes for ${path}`) })),
   };
   const snapshot = {
-    version: 1, collection: { status: "completed", drift: false, errors: [], blockers: [] }, collectedAt: 1_800_000_000_000, evaluationTime: 1_800_000_000_001,
+    version: 1, collection: { status: "completed", drift: false, errors: [], blockers: [], principal: principal() }, collectedAt: 1_800_000_000_000, evaluationTime: 1_800_000_000_001,
     selection: { status: "verified", pullRequestNumber: 5, baseSha: sha("a"), headSha: sha("b"), testedSha: sha("d"), platformGate: { id: 400, attempt: 1, latestAttempt: 1 }, runs: policy.runs.map(({ role }, index) => ({ role, id: 300 + index, attempt: 1, latestAttempt: 1 })) },
     repository: { ...policy.repository, visibility: "public", defaultBranchSha: sha("a") },
     pullRequest: { number: 5, state: "open", draft: false, baseSha: sha("a"), headSha: sha("b"), headRepositoryId: policy.repository.id, baseAncestorOfHead: true, changedFiles: 1, mergeable: true, mergeableState: "clean" },
     controlSha: sha("c"), scope: "allowlisted-documentation",
-    rules: { complete: true, enforcement: "active", requirePullRequest: true, strictRequiredChecks: true, bypassActors: [], requiredChecks: structuredClone(policy.requiredChecks), codeQuality: "errors", codeScanning: { tool: "CodeQL", securityThreshold: "high_or_higher", alertsThreshold: "errors" } },
+    rules: { complete: true, enforcement: "active", requirePullRequest: true, strictRequiredChecks: true, applicableRulesets: [{ id: 15257114, sourceType: "Repository", source: policy.repository.fullName }], currentPrincipalBypass: { status: "verified", principal: principal(), rulesets: [] }, requiredChecks: structuredClone(policy.requiredChecks), codeQuality: "errors", codeScanning: { tool: "CodeQL", securityThreshold: "high_or_higher", alertsThreshold: "errors" } },
     files: { complete: true, treeComplete: true, treesTruncated: false, totalCount: 1, pages: [{ number: 1, count: 1, bodySha256: digest("synthetic page") }], entries: [{ path: "README.md", status: "modified", oldMode: "100644", newMode: "100644" }] },
     controlClosure: { complete: true, entries: policy.controlClosure.map((entry) => ({ path: entry.path, baseSha256: entry.sha256, headSha256: entry.sha256, testedSha256: entry.sha256, baseMode: "100644", headMode: "100644", testedMode: "100644" })) },
     runs: [], sarif: [],
   };
+  snapshot.rules.currentPrincipalBypass.rulesets = snapshot.rules.applicableRulesets.map((expected) => {
+    const detail = { ...expected, enforcement: "active", currentUserCanBypass: "never", request: { method: "GET", route: `/repos/${policy.repository.fullName}/rulesets/${expected.id}`, status: 200, bodyDigest: digest(`synthetic ruleset ${expected.id}`), principal: principal() } };
+    return { initial: structuredClone(detail), final: structuredClone(detail) };
+  });
   snapshot.runs = policy.runs.map((expected, index) => {
     const run = { role: expected.role, id: 300 + index, repositoryId: policy.repository.id, workflowId: expected.workflowId, path: expected.path, event: "pull_request", attempt: 1, latestAttempt: 1, baseSha: sha("a"), headSha: sha("b"), controlSha: sha("c"), status: "completed", conclusion: "success", jobsComplete: true, totalJobs: expected.jobs.length };
     run.jobs = expected.jobs.map((expectedJob, j) => ({ id: 1000 + index * 100 + j, name: expectedJob.name, runId: run.id, attempt: 1, headSha: sha("b"), status: "completed", conclusion: expected.role === "ci" && ["check", "desktop"].includes(expectedJob.role) ? "skipped" : "success", stepsComplete: true, steps: expected.role === "ci" && ["check", "desktop"].includes(expectedJob.role) ? [] : expectedJob.steps.map((name) => ({ name, status: "completed", conclusion: "success" })) }));
@@ -102,14 +107,60 @@ test("rejects stale repository/base/head/control identities and private Free", (
   rejects((s) => { s.collectedAt -= 60_001; }, "stale-observation");
   rejects((s) => { s.collectedAt = s.evaluationTime + 1; }, "stale-observation");
 });
-test("requires complete strict no-bypass rules and exact required checks", () => {
+test("requires complete strict rules and exact required checks", () => {
   for (const key of ["complete", "requirePullRequest", "strictRequiredChecks"]) rejects((s) => { s.rules[key] = false; }, "unsafe-or-incomplete-rules");
-  rejects((s) => { s.rules.bypassActors = [{ actorId: 7 }]; }, "unsafe-or-incomplete-rules");
   rejects((s) => { s.rules.requiredChecks.pop(); }, "required-check-mismatch");
   rejects((s) => { s.rules.requiredChecks.push({ context: "unmodeled", appId: 15368 }); }, "required-check-mismatch");
   rejects((s) => { s.rules.requiredChecks[0].appId = 99; }, "required-check-mismatch");
   rejects((s) => { s.rules.codeQuality = "disabled"; }, "native-rule-mismatch");
   rejects((s) => { s.rules.codeScanning.securityThreshold = "critical"; }, "code-scanning-rule-mismatch");
+});
+test("current request credential never may coexist with other visible bypass actors", () => {
+  const { policy, snapshot } = fixture();
+  snapshot.rules.bypassActors = [{ actor_type: "RepositoryRole", actor_id: 5, bypass_mode: "always" }];
+  assert.equal(evaluateMergeEvidence(policy, snapshot).eligible, true);
+  delete snapshot.rules.bypassActors;
+  assert.equal(evaluateMergeEvidence(policy, snapshot).eligible, true);
+});
+test("requires exact coverage of every active applicable ruleset including inherited rules", () => {
+  const { policy, snapshot } = fixture();
+  const inherited = { id: 900, sourceType: "Organization", source: "openboa-ai" };
+  const detail = { ...inherited, enforcement: "active", currentUserCanBypass: "never", request: { method: "GET", route: "/repos/openboa-ai/openboa/rulesets/900", status: 200, bodyDigest: digest("synthetic inherited rule"), principal: principal() } };
+  snapshot.rules.applicableRulesets.push(inherited);
+  snapshot.rules.currentPrincipalBypass.rulesets.push({ initial: structuredClone(detail), final: structuredClone(detail) });
+  assert.equal(evaluateMergeEvidence(policy, snapshot).eligible, true);
+  snapshot.rules.currentPrincipalBypass.rulesets[1].final.currentUserCanBypass = "unknown";
+  assert.equal(evaluateMergeEvidence(policy, snapshot).reason, "principal-can-bypass-or-unknown");
+  rejects((s) => { delete s.rules.applicableRulesets; }, "incomplete-applicable-rulesets");
+  rejects((s) => { s.rules.applicableRulesets = []; }, "incomplete-applicable-rulesets");
+  rejects((s) => { s.rules.applicableRulesets.push(structuredClone(s.rules.applicableRulesets[0])); }, "duplicate-applicable-ruleset");
+  rejects((s) => { s.rules.currentPrincipalBypass.rulesets = []; }, "principal-ruleset-coverage");
+  rejects((s) => { s.rules.currentPrincipalBypass.rulesets.push(structuredClone(s.rules.currentPrincipalBypass.rulesets[0])); }, "principal-ruleset-coverage");
+  rejects((s) => { const extra = structuredClone(s.rules.currentPrincipalBypass.rulesets[0]); extra.initial.id = extra.final.id = 999; s.rules.currentPrincipalBypass.rulesets.push(extra); }, "principal-ruleset-coverage");
+  rejects((s) => { s.rules.currentPrincipalBypass.rulesets[0].initial.id = 999; }, "principal-ruleset-coverage");
+  rejects((s) => { s.rules.currentPrincipalBypass.rulesets[0].final.id = 999; }, "ruleset-identity-mismatch");
+});
+test("unknown bypass result, incomplete reread, source drift and wrong request cannot qualify", () => {
+  for (const phase of ["initial", "final"]) {
+    for (const value of ["always", "pull_requests_only", "unknown", "NEVER", "", null]) rejects((s) => { s.rules.currentPrincipalBypass.rulesets[0][phase].currentUserCanBypass = value; }, "principal-can-bypass-or-unknown");
+    rejects((s) => { delete s.rules.currentPrincipalBypass.rulesets[0][phase].currentUserCanBypass; }, "principal-can-bypass-or-unknown");
+    for (const [field, value, reason] of [["sourceType", "Organization", "ruleset-source-mismatch"], ["source", "other/repo", "ruleset-source-mismatch"], ["enforcement", "evaluate", "ruleset-enforcement-mismatch"]]) rejects((s) => { s.rules.currentPrincipalBypass.rulesets[0][phase][field] = value; }, reason);
+    for (const [field, value] of [["method", "POST"], ["route", "/repos/other/repo/rulesets/15257114"], ["status", 403], ["bodyDigest", null]]) rejects((s) => { s.rules.currentPrincipalBypass.rulesets[0][phase].request[field] = value; }, "invalid-ruleset-request");
+  }
+  rejects((s) => { delete s.rules.currentPrincipalBypass.rulesets[0].final; }, "ruleset-identity-mismatch");
+  rejects((s) => { s.rules.currentPrincipalBypass.rulesets[0].final.request.bodyDigest = digest("changed rule detail"); }, "ruleset-reread-drift");
+  rejects((s) => { s.rules.applicableRulesets[0].source = "other/repo"; }, "ruleset-source-mismatch");
+  rejects((s) => { s.rules.currentPrincipalBypass.status = "unavailable"; }, "unverified-principal-bypass");
+});
+test("report-only current credential evidence cannot be relabeled as a future writer", () => {
+  const locations = [s => s.collection, s => s.rules.currentPrincipalBypass, s => s.rules.currentPrincipalBypass.rulesets[0].initial.request, s => s.rules.currentPrincipalBypass.rulesets[0].final.request];
+  for (const locate of locations) {
+    rejects((s) => { delete locate(s).principal; }, "unverified-current-principal");
+    rejects((s) => { locate(s).principal = null; }, "unverified-current-principal");
+    rejects((s) => { locate(s).principal.kind = "User"; }, "unverified-current-principal");
+    rejects((s) => { locate(s).principal.scope = "future-merge-token"; }, "unverified-current-principal");
+    rejects((s) => { locate(s).principal.fingerprint = "not-a-credential"; }, "unverified-current-principal");
+  }
 });
 test("rejects incomplete paginated diff and truncated tree", () => {
   for (const key of ["complete", "treeComplete"]) rejects((s) => { s.files[key] = false; }, "incomplete-files");
