@@ -18,3 +18,14 @@ before its implementation. The accepted condition permits main push or
 same-repository `pull_request_target`, retaining `needs: verify` and the required
 aggregate's rejection of skipped/failed lanes. This acceptance does not claim
 that the next raw CodeQL gate will pass.
+
+## Candidate data and caller provenance follow-up
+
+On 2026-10-09 the independent reviewer accepted
+`review-remediation-addendum.md` SHA256
+`3cc9c640ccc2e15aa5ff556217b3b4122d417701c2045a8fedbfbbf5bc635684`
+before implementation. The accepted scope uses base-owned target callers,
+same-repository PR admission, base repository PR refs and bounded workflow-file
+reads. Fork PRs remain unsupported and the checkout safety guard stays enabled.
+This source acceptance does not replace native current-head code-owner approval
+or post-bootstrap qualification of the producer.

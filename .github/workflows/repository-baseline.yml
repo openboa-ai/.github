@@ -18,9 +18,13 @@ jobs:
     env:
       EVENT_NAME: ${{ github.event_name }}
       REPOSITORY: ${{ github.repository }}
+      REPOSITORY_ID: ${{ github.repository_id }}
       REF_NAME: ${{ github.ref }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
       PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      PR_BASE_REPOSITORY_ID: ${{ github.event.pull_request.base.repo.id }}
+      PR_HEAD_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
@@ -28,15 +32,20 @@ jobs:
         run: |
           set -euo pipefail
           repository_pattern='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          positive_integer_pattern='^[1-9][0-9]*$'
           sha_pattern='^[0-9a-f]{40}$'
           zero_sha=0000000000000000000000000000000000000000
           [[ "$REPOSITORY" =~ $repository_pattern ]] || exit 1
+          [[ "$REPOSITORY_ID" =~ $positive_integer_pattern ]] || exit 1
           [[ "$HEAD_SHA" =~ $sha_pattern && "$HEAD_SHA" != "$zero_sha" ]] || exit 1
           [[ "$BASE_SHA" =~ $sha_pattern ]] || exit 1
           case "$EVENT_NAME" in
-            pull_request)
+            pull_request_target)
+              [[ "$PR_NUMBER" =~ $positive_integer_pattern ]] || exit 1
               [[ "$PR_BASE_REPOSITORY" = "$REPOSITORY" ]] || exit 1
-              [[ "$PR_HEAD_REPOSITORY" =~ $repository_pattern ]] || exit 1
+              [[ "$PR_HEAD_REPOSITORY" = "$REPOSITORY" ]] || exit 1
+              [[ "$PR_BASE_REPOSITORY_ID" = "$REPOSITORY_ID" ]] || exit 1
+              [[ "$PR_HEAD_REPOSITORY_ID" = "$REPOSITORY_ID" ]] || exit 1
               [[ "$BASE_SHA" != "$zero_sha" ]] || exit 1
               ;;
             push)
@@ -55,8 +64,8 @@ jobs:
       - name: Check out exact candidate as data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ github.repository }}
+          ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.sha }}
           fetch-depth: 0
           persist-credentials: false
           path: candidate
@@ -83,12 +92,22 @@ jobs:
       - name: Validate all candidate workflows with trusted configuration
         run: |
           set -euo pipefail
+          for directory in candidate candidate/.github candidate/.github/workflows; do
+            test -d "$directory" && test ! -L "$directory" || exit 1
+          done
           shopt -s nullglob dotglob
           workflows=(candidate/.github/workflows/*.yml candidate/.github/workflows/*.yaml)
           test "${#workflows[@]}" -gt 0
+          for workflow in "${workflows[@]}"; do
+            test -f "$workflow" && test ! -L "$workflow" || exit 1
+          done
           lint_config="$(mktemp "${RUNNER_TEMP:?}/baseline-actionlint.XXXXXX")"
           printf '{}\n' > "$lint_config"
-          actionlint -config-file "$lint_config" -shellcheck= -pyflakes= "${workflows[@]}"
+          for workflow in "${workflows[@]}"; do
+            printf 'Validating workflow: %q\n' "$workflow"
+            # Default stdin identity prevents candidate project metadata discovery.
+            actionlint -config-file "$lint_config" -shellcheck= -pyflakes= - < "$workflow"
+          done
       - name: Install trusted secret scanner
         run: bash controls/.github/scripts/install-gitleaks.sh
       - name: Scan candidate history and files with trusted configuration

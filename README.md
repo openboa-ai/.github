@@ -10,7 +10,7 @@ evaluator implementation.
 `repository-baseline.yml` provides workflow syntax, whitespace and secret checks
 for newly initialized repositories before a product verification contract is
 registered. It is reusable only, accepts no inputs or secrets, and admits
-`pull_request` or `main` push context. Its stable job is `baseline`, named
+same-repository `pull_request_target` or `main` push context. Its stable job is `baseline`, named
 `Trusted repository baseline`; callers use the name `trusted-baseline` and an
 immutable workflow SHA. Verify the resulting check name and referenced workflow
 revision from a live run before requiring that check.
@@ -19,7 +19,17 @@ This baseline treats candidate files as data, uses pinned trusted tools and
 explicit linter/scanner configuration, and does not execute product code. It
 does not replace the Coffee gate described below, independent review, product
 tests or approval policy. Introduce it alongside a caller's existing required
-checks. See the [accepted contract](docs/engineering/sdlc-baseline/spec.md).
+checks. The separate inert caller must already exist on main before a target
+run can qualify the producer. Fork PRs are unsupported; no checkout safety
+override is enabled. See the [original contract](docs/engineering/sdlc-baseline/spec.md)
+and [accepted remediation](docs/engineering/sdlc-baseline/review-remediation-addendum.md).
+
+Workflow paths and their ancestors must be regular files/directories without
+symlinks. Each workflow is linted through stdin with a trusted empty config,
+so local action metadata is outside this hygiene lane. The explicit integration
+check `node scripts/test-baseline-actionlint.mjs` uses actionlint 1.7.12, selected
+with `ACTIONLINT_BINARY`, to verify path rejection, metadata isolation and normal
+syntax checks.
 
 `node scripts/test-baseline-gitleaks.mjs` explicitly tests deleted historical
 credentials against real Gitleaks 8.30.1; set `GITLEAKS_TRUSTED_CONFIG` to its

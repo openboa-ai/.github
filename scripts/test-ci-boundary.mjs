@@ -32,22 +32,40 @@ test("reusable baseline has no caller-supplied authority or candidate execution"
   assert.match(baselineWorkflow, /permissions: \{\}[\s\S]*?permissions:\n      contents: read\n/u);
   assert.doesNotMatch(baselineWorkflow, /\binputs:|\boutputs:|\bsecrets:|continue-on-error|\bwrite\b|\benvironment:|working-directory: candidate|(?:node|bash|sh|python) candidate\//u);
   assert.equal((baselineWorkflow.match(/persist-credentials: false/gu) || []).length, 2);
+  assert.doesNotMatch(baselineWorkflow, /allow-unsafe-pr-checkout/u);
   assert.match(baselineWorkflow, /repository: openboa-ai\/\.github\n          ref: 700dacb7d811a080cb49bb4a81a9d5f437d697fd/u);
+  const checkout = baselineWorkflow.split("      - name: Check out exact candidate as data\n")[1].split("      - name:")[0];
+  assert.match(checkout, /repository: \$\{\{ github.repository \}\}/u);
+  assert.match(checkout, /ref: \$\{\{ github.event_name == 'pull_request_target' && format\('refs\/pull\/\{0\}\/head', github.event.pull_request.number\) \|\| github.sha \}\}/u);
+  assert.match(checkout, /fetch-depth: 0/u);
+  assert.match(baselineWorkflow, /PR_NUMBER: \$\{\{ github.event.pull_request.number \}\}/u);
+  assert.match(baselineWorkflow, /REPOSITORY_ID: \$\{\{ github.repository_id \}\}/u);
+  for (const kind of ["HEAD", "BASE"]) {
+    assert.ok(baselineWorkflow.includes(`PR_${kind}_REPOSITORY_ID: \${{ github.event.pull_request.${kind.toLowerCase()}.repo.id }}`));
+  }
   for (const match of baselineWorkflow.matchAll(/uses: ([^\s]+)/gu)) assert.match(match[1], /@[0-9a-f]{40}$/u);
 });
 
 test("baseline event admission rejects unsupported or incomplete authority", () => {
   const valid = {
-    EVENT_NAME: "pull_request", REPOSITORY: "openboa-ai/example", REF_NAME: "refs/pull/3/merge",
-    PR_BASE_REPOSITORY: "openboa-ai/example", PR_HEAD_REPOSITORY: "contributor/example",
+    EVENT_NAME: "pull_request_target", REPOSITORY: "openboa-ai/example", REF_NAME: "refs/heads/main",
+    REPOSITORY_ID: "123", PR_NUMBER: "3", PR_BASE_REPOSITORY_ID: "123", PR_HEAD_REPOSITORY_ID: "123",
+    PR_BASE_REPOSITORY: "openboa-ai/example", PR_HEAD_REPOSITORY: "openboa-ai/example",
     HEAD_SHA: "a".repeat(40), BASE_SHA: "b".repeat(40),
   };
   for (const [override, allowed] of [
     [{}, true], [{ EVENT_NAME: "push", REF_NAME: "refs/heads/main" }, true],
     [{ EVENT_NAME: "push", REF_NAME: "refs/heads/main", BASE_SHA: "0".repeat(40) }, true],
-    [{ EVENT_NAME: "workflow_dispatch" }, false], [{ EVENT_NAME: "pull_request_target" }, false],
+    [{ EVENT_NAME: "workflow_dispatch" }, false], [{ EVENT_NAME: "pull_request" }, false],
     [{ EVENT_NAME: "push", REF_NAME: "refs/heads/topic" }, false],
     [{ PR_BASE_REPOSITORY: "another/repository" }, false], [{ PR_HEAD_REPOSITORY: "" }, false],
+    [{ PR_HEAD_REPOSITORY: "contributor/example", PR_HEAD_REPOSITORY_ID: "456" }, false],
+    [{ PR_HEAD_REPOSITORY: "private-owner/example", PR_HEAD_REPOSITORY_ID: "456" }, false],
+    [{ PR_HEAD_REPOSITORY: "contributor/example" }, false],
+    [{ PR_HEAD_REPOSITORY_ID: "456" }, false], [{ PR_BASE_REPOSITORY_ID: "456" }, false],
+    [{ PR_HEAD_REPOSITORY_ID: "" }, false], [{ PR_BASE_REPOSITORY_ID: "" }, false],
+    ...["", "0", "01", "-1", "1/../head", "1\n", "3.0"].map((PR_NUMBER) => [{ PR_NUMBER }, false]),
+    ...["", "0", "01", "-1", "123\n"].map((REPOSITORY_ID) => [{ REPOSITORY_ID }, false]),
     [{ REPOSITORY: "../../tmp" }, false], [{ HEAD_SHA: "refs/heads/main" }, false],
     [{ HEAD_SHA: "" }, false], [{ HEAD_SHA: "0".repeat(40) }, false],
     [{ BASE_SHA: "" }, false], [{ BASE_SHA: "0".repeat(40) }, false],
@@ -59,27 +77,94 @@ test("baseline event admission rejects unsupported or incomplete authority", () 
   }
 });
 
-test("baseline lint covers all extensions and cannot inherit candidate ignore configuration", () => {
+test("baseline lint covers all extensions as stdin without candidate project discovery", () => {
   const script = baselineScript("Validate all candidate workflows with trusted configuration");
-  const stub = 'actionlint() { test "$1" = -config-file; test "$(cat "$2")" = "{}"; shift 2; printf "%s\\0" "$@"; return "$LINT_STATUS"; }\n';
-  for (const files of [["existing.yml", "new workflow.yaml", ".hidden.yaml"], ["only.yml"], ["only.yaml"], []]) {
+  assert.doesNotMatch(script, /-stdin-filename/u);
+  const stub = 'actionlint() { test "$#" = 5; test "$1" = -config-file; test "$(cat "$2")" = "{}"; shift 2; test "$*" = "-shellcheck= -pyflakes= -"; cat >> "$LINT_CAPTURE"; printf "\\0" >> "$LINT_CAPTURE"; return "$LINT_STATUS"; }\n';
+  for (const files of [["existing.yml", "new workflow.yaml", ".hidden.yaml", "line\nbreak.yml"], ["only.yml"], ["only.yaml"], []]) {
     const root = mkdtempSync(join(tmpdir(), "baseline-lint-"));
     try {
       const paths = files.map((file) => "candidate/.github/workflows/" + file);
-      for (const path of paths) write(root, path, "on: push\n");
+      const payloads = paths.map((_, index) => `on: push\n# fixture ${index}\n`);
+      paths.forEach((path, index) => write(root, path, payloads[index]));
       write(root, "candidate/.github/actionlint.yaml", "paths:\n  '**':\n    ignore: ['.*']\n");
       for (const status of [0, 23]) {
+        const capture = join(root, "capture");
+        writeFileSync(capture, "");
         const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", stub + script], {
-          cwd: root, env: { PATH: process.env.PATH, RUNNER_TEMP: root, LINT_STATUS: String(status) }, encoding: "utf8",
+          cwd: root, env: { PATH: process.env.PATH, RUNNER_TEMP: root, LINT_STATUS: String(status), LINT_CAPTURE: capture }, encoding: "utf8",
         });
-        if (files.length === 0) { assert.notEqual(result.status, 0); assert.equal(result.stdout, ""); }
+        const calls = readFileSync(capture, "utf8").split("\0").slice(0, -1);
+        if (files.length === 0) { assert.notEqual(result.status, 0); assert.equal(result.stdout, ""); assert.deepEqual(calls, []); }
         else {
           assert.equal(result.status, status, result.stderr);
-          assert.deepEqual(result.stdout.split("\0").slice(0, -1).sort(), ["-shellcheck=", "-pyflakes=", ...paths].sort());
+          if (status === 0) assert.deepEqual(calls.sort(), payloads.sort());
+          else { assert.equal(calls.length, 1); assert.ok(payloads.includes(calls[0])); }
+          assert.doesNotMatch(result.stdout, /line\nbreak/u, "Control characters must not create log lines");
         }
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
   }
+});
+
+test("baseline lint rejects symlinks and nonregular entries before any linter call", () => {
+  for (const variant of ["root-link", "github-link", "workflows-link", "file-link", "dangling-link", "directory", "fifo"]) {
+    const root = mkdtempSync(join(tmpdir(), "baseline-path-admission-"));
+    try {
+      write(root, "outside/.github/workflows/ci.yml", "on: push\n");
+      if (variant === "root-link") symlinkSync("outside", join(root, "candidate"));
+      else if (variant === "github-link") {
+        mkdirSync(join(root, "candidate")); symlinkSync("../outside/.github", join(root, "candidate/.github"));
+      } else if (variant === "workflows-link") {
+        mkdirSync(join(root, "candidate/.github"), { recursive: true });
+        symlinkSync("../../outside/.github/workflows", join(root, "candidate/.github/workflows"));
+      } else {
+        write(root, "candidate/.github/workflows/a-valid.yml", "on: push\n");
+        const bad = join(root, "candidate/.github/workflows/z-invalid.yaml");
+        if (variant === "file-link") symlinkSync("../../../outside/.github/workflows/ci.yml", bad);
+        if (variant === "dangling-link") symlinkSync("missing", bad);
+        if (variant === "directory") mkdirSync(bad);
+        if (variant === "fifo") execFileSync("mkfifo", [bad]);
+      }
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c",
+        'actionlint() { echo LINTER_INVOKED; return 0; }\n' + baselineScript("Validate all candidate workflows with trusted configuration")], {
+        cwd: root, env: { PATH: process.env.PATH, RUNNER_TEMP: root }, encoding: "utf8", timeout: 5000,
+      });
+      assert.equal(result.error, undefined, variant + " must reject without hanging");
+      assert.notEqual(result.status, 0, variant);
+      assert.doesNotMatch(result.stdout, /LINTER_INVOKED/u, variant);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test("base repository PR ref preserves exact head and rejects a moving ref", () => {
+  const root = mkdtempSync(join(tmpdir(), "baseline-pr-ref-"));
+  const origin = join(root, "base.git"), author = join(root, "author"), candidate = join(root, "candidate");
+  try {
+    for (const path of [origin, author, candidate]) mkdirSync(path);
+    git(origin, "init", "--bare", "--initial-branch=main");
+    git(author, "init", "--initial-branch=main");
+    write(author, "README.md", "Base\n");
+    const base = commit(author);
+    git(author, "remote", "add", "origin", origin);
+    git(author, "push", "origin", "HEAD:refs/heads/main");
+    write(author, "README.md", "Candidate\n");
+    const head = commit(author);
+    git(author, "push", "origin", "HEAD:refs/pull/3/head");
+    assert.notEqual(git(origin, "rev-parse", "refs/heads/main").trim(), head);
+    git(candidate, "init"); git(candidate, "remote", "add", "origin", origin);
+    const checkout = () => {
+      git(candidate, "fetch", "origin", "+refs/pull/3/head:refs/remotes/pull/3/head");
+      git(candidate, "checkout", "--detach", "refs/remotes/pull/3/head");
+    };
+    const verify = () => spawnSync("bash", ["-e", "-o", "pipefail", "-c", baselineScript("Verify candidate identity and whitespace")], {
+      cwd: root, env: { PATH: process.env.PATH, HEAD_SHA: head, BASE_SHA: base, EVENT_NAME: "pull_request_target", REPOSITORY: "openboa-ai/example" }, encoding: "utf8",
+    });
+    checkout(); assert.equal(verify().status, 0);
+    write(author, "README.md", "Advanced\n"); commit(author);
+    git(author, "push", "origin", "HEAD:refs/pull/3/head");
+    checkout(); assert.notEqual(verify().status, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("baseline diff binds the checked-out head and validates initial and subsequent commits", () => {

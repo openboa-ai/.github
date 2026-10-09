@@ -41,7 +41,7 @@ for (const attributes of ["* -diff -whitespace", "* binary -whitespace"]) {
     rmSync(join(candidate, "nested/removed.env"));
     git(candidate, "add", "."); git(candidate, "commit", "-m", "remove fixture from working tree");
     const head = git(candidate, "rev-parse", "HEAD").trim();
-    const env = { ...process.env, GITLEAKS_BINARY: binary, GITLEAKS_TRUSTED_CONFIG: config, HEAD_SHA: head, BASE_SHA: base, EVENT_NAME: "pull_request", REPOSITORY: "openboa-ai/example" };
+    const env = { ...process.env, GITLEAKS_BINARY: binary, GITLEAKS_TRUSTED_CONFIG: config, HEAD_SHA: head, BASE_SHA: base, EVENT_NAME: "pull_request_target", REPOSITORY: "openboa-ai/example" };
     const prepare = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script("Verify candidate identity and whitespace")], { cwd: root, env, encoding: "utf8" });
     assert.equal(prepare.status, 0, prepare.stdout + prepare.stderr);
     const directory = spawnSync(binary, ["dir", "--config", config, "--gitleaks-ignore-path", "/dev/null", "--ignore-gitleaks-allow", "--redact", "--no-banner", candidate], { env, encoding: "utf8" });
