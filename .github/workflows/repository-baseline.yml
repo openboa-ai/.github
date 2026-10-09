@@ -1,0 +1,116 @@
+name: OpenBoa repository baseline
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  baseline:
+    name: Trusted repository baseline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      REPOSITORY: ${{ github.repository }}
+      REPOSITORY_ID: ${{ github.repository_id }}
+      REF_NAME: ${{ github.ref }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+      PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      PR_BASE_REPOSITORY_ID: ${{ github.event.pull_request.base.repo.id }}
+      PR_HEAD_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - name: Admit exact event context
+        run: |
+          set -euo pipefail
+          repository_pattern='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          positive_integer_pattern='^[1-9][0-9]*$'
+          sha_pattern='^[0-9a-f]{40}$'
+          zero_sha=0000000000000000000000000000000000000000
+          [[ "$REPOSITORY" =~ $repository_pattern ]] || exit 1
+          [[ "$REPOSITORY_ID" =~ $positive_integer_pattern ]] || exit 1
+          [[ "$HEAD_SHA" =~ $sha_pattern && "$HEAD_SHA" != "$zero_sha" ]] || exit 1
+          [[ "$BASE_SHA" =~ $sha_pattern ]] || exit 1
+          case "$EVENT_NAME" in
+            pull_request_target)
+              [[ "$PR_NUMBER" =~ $positive_integer_pattern ]] || exit 1
+              [[ "$PR_BASE_REPOSITORY" = "$REPOSITORY" ]] || exit 1
+              [[ "$PR_HEAD_REPOSITORY" = "$REPOSITORY" ]] || exit 1
+              [[ "$PR_BASE_REPOSITORY_ID" = "$REPOSITORY_ID" ]] || exit 1
+              [[ "$PR_HEAD_REPOSITORY_ID" = "$REPOSITORY_ID" ]] || exit 1
+              [[ "$BASE_SHA" != "$zero_sha" ]] || exit 1
+              ;;
+            push)
+              [[ "$REF_NAME" = refs/heads/main ]] || exit 1
+              ;;
+            *) exit 1 ;;
+          esac
+      - name: Check out immutable baseline tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openboa-ai/.github
+          ref: 700dacb7d811a080cb49bb4a81a9d5f437d697fd
+          fetch-depth: 1
+          persist-credentials: false
+          path: controls
+      - name: Check out exact candidate as data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+      - name: Verify candidate identity and whitespace
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$HEAD_SHA"
+          if test "$EVENT_NAME" = push && test "$BASE_SHA" = 0000000000000000000000000000000000000000; then
+            comparison="$(git -C candidate hash-object -t tree /dev/null)"
+          else
+            if ! git -C candidate cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+              git -C candidate fetch --no-tags --depth=1 "https://github.com/$REPOSITORY.git" "$BASE_SHA"
+            fi
+            git -C candidate cat-file -e "$BASE_SHA^{commit}"
+            comparison="$BASE_SHA"
+          fi
+          # Force text patches for whitespace and subsequent history scanning.
+          # Candidate -diff/binary attributes must not hide either kind of data.
+          mkdir -p candidate/.git/info
+          printf '%s\n' '* diff whitespace=blank-at-eol,blank-at-eof,space-before-tab' > candidate/.git/info/attributes
+          git -C candidate diff --check --no-ext-diff --no-textconv "$comparison" "$HEAD_SHA" --
+      - name: Install pinned workflow linter
+        run: bash controls/.github/scripts/install-actionlint.sh
+      - name: Validate all candidate workflows with trusted configuration
+        run: |
+          set -euo pipefail
+          for directory in candidate candidate/.github candidate/.github/workflows; do
+            test -d "$directory" && test ! -L "$directory" || exit 1
+          done
+          shopt -s nullglob dotglob
+          workflows=(candidate/.github/workflows/*.yml candidate/.github/workflows/*.yaml)
+          test "${#workflows[@]}" -gt 0
+          for workflow in "${workflows[@]}"; do
+            test -f "$workflow" && test ! -L "$workflow" || exit 1
+          done
+          lint_config="$(mktemp "${RUNNER_TEMP:?}/baseline-actionlint.XXXXXX")"
+          printf '{}\n' > "$lint_config"
+          for workflow in "${workflows[@]}"; do
+            printf 'Validating workflow: %q\n' "$workflow"
+            # Default stdin identity prevents candidate project metadata discovery.
+            actionlint -config-file "$lint_config" -shellcheck= -pyflakes= - < "$workflow"
+          done
+      - name: Install trusted secret scanner
+        run: bash controls/.github/scripts/install-gitleaks.sh
+      - name: Scan candidate history and files with trusted configuration
+        run: |
+          gitleaks git --config "$GITLEAKS_TRUSTED_CONFIG" --gitleaks-ignore-path /dev/null --ignore-gitleaks-allow --redact --no-banner candidate
+          gitleaks dir --config "$GITLEAKS_TRUSTED_CONFIG" --gitleaks-ignore-path /dev/null --ignore-gitleaks-allow --redact --no-banner candidate
