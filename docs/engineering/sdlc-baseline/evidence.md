@@ -4,7 +4,7 @@ Date: 2026-10-09. Accepted specification revision: `071a9bc`.
 
 | Check | Observed result |
 | --- | --- |
-| `npm test` | 38 tests: 37 passed, 1 existing Linux-only test skipped on macOS |
+| `npm test` | 39 tests: 38 passed, 1 existing Linux-only test skipped on macOS |
 | actionlint 1.7.12 | All three workflows passed; binary archive checksum verified by the pinned installer |
 | Shell and Node syntax | All shell control scripts and JavaScript control/test scripts passed |
 | `git diff --check` | Passed |
@@ -33,12 +33,24 @@ checks. Tests cover root and nested candidate attributes, both `-diff` and the
 `binary` macro, and a credential removed from the final working tree. The
 synthetic credential is generated locally and is never issued by a provider.
 
+## Central CodeQL admission follow-up
+
+[PR #24 run 37872379703](https://github.com/openboa-ai/.github/actions/runs/37872379703)
+on `b5df6ff` passed trusted isolated verification and JavaScript CodeQL. The
+Actions raw SARIF gate rejected one finding. The approved follow-up in
+`codeql-admission-addendum.md` adds a native same-repository event condition to
+the CodeQL job and keeps the existing guard and result evaluator unchanged.
+Its source-bound truth table, full unit suite, actionlint, syntax, working-tree
+secret scan and diff checks passed locally. The next candidate still requires
+fresh remote raw CodeQL results.
+
 ## Unverified delivery states
 
-- No push, pull request, GitHub CI, approval, merge, caller upgrade or protection
-  change is established by this record.
+- PR #24 and the partial CI results above are established; no approval, merge,
+  caller upgrade or final CodeQL pass is established by this record.
 - The Docker daemon was unavailable. Real container isolation was not exercised
-  locally; the pre-existing trusted launcher and central workflow are unchanged.
+  locally; the trusted launcher is unchanged and the central workflow change is
+  limited to the accepted native admission condition.
 - GitHub run identity, the reusable workflow's reported revision and the full
   `trusted-baseline / Trusted repository baseline` check name require a real
   pinned caller run before activation.

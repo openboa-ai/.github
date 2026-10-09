@@ -520,6 +520,30 @@ test("central CodeQL remains inert, base-controlled and attributed to the exact 
     if (!job.startsWith("codeql:\n")) assert.doesNotMatch(job, /security-events: write/u);
   }
 });
+test("native CodeQL admission permits only main push and same-repository target PRs", () => {
+  const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
+  const scanner = trusted.slice(trusted.indexOf("\n  codeql:\n"), trusted.indexOf("\n  required:\n"));
+  const expression = scanner.match(/    if: >-\n      \$\{\{ ([\s\S]*?) \}\}\n    runs-on:/u)?.[1].replace(/\s+/gu, " ");
+  assert.equal(expression, "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository)");
+  // This fixed, asserted expression uses only string equality and boolean
+  // operators shared with JavaScript. It does not emulate all Actions syntax.
+  const eligible = new Function("github", `return (${expression});`);
+  for (const [eventName, ref, headRepository, expected] of [
+    ["push", "refs/heads/main", "", true],
+    ["push", "refs/heads/topic", "", false],
+    ["pull_request_target", "refs/heads/main", "openboa-ai/.github", true],
+    ["pull_request_target", "refs/heads/main", "outsider/.github", false],
+    ["pull_request_target", "refs/heads/main", "", false],
+    ["pull_request", "refs/pull/1/merge", "openboa-ai/.github", false],
+    ["workflow_dispatch", "refs/heads/main", "openboa-ai/.github", false],
+    ["workflow_run", "refs/heads/main", "openboa-ai/.github", false],
+  ]) {
+    const context = { event_name: eventName, ref, repository: "openboa-ai/.github", event: { pull_request: { head: { repo: { full_name: headRepository } } } } };
+    assert.equal(eligible(context), expected, JSON.stringify(context));
+  }
+  assert.match(scanner, /needs: verify\n/u);
+  assert.doesNotMatch(expression, /always\(|success\(/u);
+});
 test("CodeQL root checkout preserves only base validators outside the candidate source tree", () => {
   const trusted = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
   const scanner = trusted.slice(trusted.indexOf("\n  codeql:\n"), trusted.indexOf("\n  required:\n"));
