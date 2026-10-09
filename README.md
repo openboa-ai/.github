@@ -5,6 +5,22 @@ Each Coffee Chat repository answers whether its own product or data is correct.
 Neither requires the center to know Product Skills, benchmark folders, or an
 evaluator implementation.
 
+## Additive repository baseline
+
+`repository-baseline.yml` provides workflow syntax, whitespace and secret checks
+for newly initialized repositories before a product verification contract is
+registered. It is reusable only, accepts no inputs or secrets, and admits
+`pull_request` or `main` push context. Its stable job is `baseline`, named
+`Trusted repository baseline`; callers use the name `trusted-baseline` and an
+immutable workflow SHA. Verify the resulting check name and referenced workflow
+revision from a live run before requiring that check.
+
+This baseline treats candidate files as data, uses pinned trusted tools and
+explicit linter/scanner configuration, and does not execute product code. It
+does not replace the Coffee gate described below, independent review, product
+tests or approval policy. Introduce it alongside a caller's existing required
+checks. See the [accepted contract](docs/engineering/sdlc-baseline/spec.md).
+
 ## Ownership and execution
 
 1. An exact, inert wrapper selects this reusable workflow by immutable SHA.
