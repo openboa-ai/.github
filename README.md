@@ -21,6 +21,12 @@ does not replace the Coffee gate described below, independent review, product
 tests or approval policy. Introduce it alongside a caller's existing required
 checks. See the [accepted contract](docs/engineering/sdlc-baseline/spec.md).
 
+`node scripts/test-baseline-gitleaks.mjs` explicitly tests deleted historical
+credentials against real Gitleaks 8.30.1; set `GITLEAKS_TRUSTED_CONFIG` to its
+checksum-verified configuration. It rejects candidate binary diff attributes
+that could otherwise hide history while a directory scan passes. This test is
+separate from the offline unit suite because it requires the scanner binary.
+
 ## Ownership and execution
 
 1. An exact, inert wrapper selects this reusable workflow by immutable SHA.

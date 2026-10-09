@@ -132,6 +132,32 @@ test("baseline secret scans use trusted config and propagate both failures", () 
   }
 });
 
+test("baseline whitespace rejects changes hidden by binary diff attributes", () => {
+  for (const attributes of ["* -diff -whitespace", "* binary -whitespace"]) {
+    const root = mkdtempSync(join(tmpdir(), "baseline-binary-attributes-"));
+    const candidate = join(root, "candidate");
+    try {
+      mkdirSync(candidate);
+      git(candidate, "init", "--initial-branch=main");
+      git(candidate, "config", "user.name", "Fixture");
+      git(candidate, "config", "user.email", "fixture@example.invalid");
+      write(candidate, ".gitattributes", attributes + "\n");
+      write(candidate, "nested/file.txt", "Clean line\n");
+      git(candidate, "add", "."); git(candidate, "commit", "-m", "initial");
+      const base = git(candidate, "rev-parse", "HEAD").trim();
+      write(candidate, "nested/.gitattributes", attributes + "\n");
+      write(candidate, "nested/file.txt", "Trailing whitespace \n");
+      git(candidate, "add", "."); git(candidate, "commit", "-m", "candidate binary override");
+      const head = git(candidate, "rev-parse", "HEAD").trim();
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", baselineScript("Verify candidate identity and whitespace")], {
+        cwd: root, env: { PATH: process.env.PATH, HEAD_SHA: head, BASE_SHA: base, EVENT_NAME: "pull_request", REPOSITORY: "openboa-ai/example" }, encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0, attributes + " suppressed the whitespace check");
+      assert.match(result.stdout + result.stderr, /trailing whitespace/iu);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test("historical fixture exception is repository-, object- and digest-bound and history-only", () => {
   const start = workflow.indexOf("          # Known historical synthetic fixture,");
   const end = workflow.indexOf("          gitleaks git --config", start);
