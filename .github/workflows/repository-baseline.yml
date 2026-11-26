@@ -82,11 +82,12 @@ jobs:
             git -C candidate cat-file -e "$BASE_SHA^{commit}"
             comparison="$BASE_SHA"
           fi
-          # Force text patches for whitespace and subsequent history scanning.
-          # Candidate -diff/binary attributes must not hide either kind of data.
+          # Reset candidate -diff/binary/whitespace overrides so text files stay checked while genuine binary blobs use native detection.
           mkdir -p candidate/.git/info
-          printf '%s\n' '* diff whitespace=blank-at-eol,blank-at-eof,space-before-tab' > candidate/.git/info/attributes
+          printf '%s\n' '* !diff whitespace=blank-at-eol,blank-at-eof,space-before-tab' > candidate/.git/info/attributes
           git -C candidate diff --check --no-ext-diff --no-textconv "$comparison" "$HEAD_SHA" --
+          # Force text patches for subsequent history secret scanning so candidate attributes cannot hide deleted secrets.
+          printf '%s\n' '* diff' > candidate/.git/info/attributes
       - name: Install pinned workflow linter
         run: bash controls/.github/scripts/install-actionlint.sh
       - name: Validate all candidate workflows with trusted configuration
