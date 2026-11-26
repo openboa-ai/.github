@@ -243,6 +243,52 @@ test("baseline whitespace rejects changes hidden by binary diff attributes", () 
   }
 });
 
+test("baseline whitespace allows genuine binary blobs while preserving forced text patches for history scanning", () => {
+  const root = mkdtempSync(join(tmpdir(), "baseline-binary-blobs-"));
+  const candidate = join(root, "candidate");
+  try {
+    mkdirSync(candidate);
+    git(candidate, "init", "--initial-branch=main");
+    git(candidate, "config", "user.name", "Fixture");
+    git(candidate, "config", "user.email", "fixture@example.invalid");
+    write(candidate, "README.md", "Baseline\n");
+    git(candidate, "add", "."); git(candidate, "commit", "-m", "initial");
+    const base = git(candidate, "rev-parse", "HEAD").trim();
+
+    // Genuine binary payload with NUL bytes and trailing spaces/tabs before newlines.
+    const binaryAsset = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]),
+      Buffer.from("trailing space and tab \t\n\x00more binary \n"),
+    ]);
+    mkdirSync(join(candidate, "assets"), { recursive: true });
+    writeFileSync(join(candidate, "assets/photo.png"), binaryAsset);
+    write(candidate, "README.md", "Baseline\nClean text change\n");
+    git(candidate, "add", "."); git(candidate, "commit", "-m", "add binary asset and clean text");
+    const cleanHead = git(candidate, "rev-parse", "HEAD").trim();
+
+    const cleanResult = spawnSync("bash", ["-e", "-o", "pipefail", "-c", baselineScript("Verify candidate identity and whitespace")], {
+      cwd: root, env: { PATH: process.env.PATH, HEAD_SHA: cleanHead, BASE_SHA: base, EVENT_NAME: "pull_request_target", REPOSITORY: "openboa-ai/example" }, encoding: "utf8",
+    });
+    assert.equal(cleanResult.status, 0, cleanResult.stdout + cleanResult.stderr);
+    assert.equal(
+      readFileSync(join(candidate, ".git/info/attributes"), "utf8").trim(),
+      "* diff",
+      "Subsequent history secret scanning must retain forced text patches",
+    );
+
+    // Adding trailing whitespace to a text file alongside the binary asset must still fail even with candidate -diff.
+    write(candidate, ".gitattributes", "* -diff -whitespace\n");
+    write(candidate, "README.md", "Baseline\nBad trailing space \n");
+    git(candidate, "add", "."); git(candidate, "commit", "-m", "bad text alongside binary");
+    const badHead = git(candidate, "rev-parse", "HEAD").trim();
+    const badResult = spawnSync("bash", ["-e", "-o", "pipefail", "-c", baselineScript("Verify candidate identity and whitespace")], {
+      cwd: root, env: { PATH: process.env.PATH, HEAD_SHA: badHead, BASE_SHA: base, EVENT_NAME: "pull_request_target", REPOSITORY: "openboa-ai/example" }, encoding: "utf8",
+    });
+    assert.notEqual(badResult.status, 0);
+    assert.match(badResult.stdout + badResult.stderr, /trailing whitespace/iu);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("historical fixture exception is repository-, object- and digest-bound and history-only", () => {
   const start = workflow.indexOf("          # Known historical synthetic fixture,");
   const end = workflow.indexOf("          gitleaks git --config", start);
