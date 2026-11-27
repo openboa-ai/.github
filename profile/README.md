@@ -21,7 +21,7 @@
 
 ## Public Projects
 
-**OpenBoa** (*Open Business of Agents*) builds open companies, tools, and interfaces where human direction meets continuous autonomous execution.
+**OpenBoa** (*Boa* = **Business of Agents**) builds autonomous companies, tools, and interfaces in the open—where human direction meets continuous execution.
 
 | Mark | Project | Slogan | Overview |
 | :---: | :--- | :--- | :--- |
