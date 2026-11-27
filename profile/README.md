@@ -21,6 +21,8 @@
 
 ## Public Projects
 
+**OpenBoa** (*Open Business of Agents*) builds open companies, tools, and interfaces where human direction meets continuous autonomous execution.
+
 | Mark | Project | Slogan | Overview |
 | :---: | :--- | :--- | :--- |
 | <img src="https://raw.githubusercontent.com/openboa-ai/yogurt/main/design/assets/logo/upright-9.svg" alt="OpenBoa mark" width="36" /> | **[openboa.ai](https://github.com/openboa-ai/openboa.ai)** | *Every limit has a shelf life.* | OpenBoa’s official website — vision, approach, and interactive 3D identity. |
